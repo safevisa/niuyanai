@@ -1,0 +1,31 @@
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "BullEye AI"
+    VERSION: str = "1.0.0"
+    API_V1_STR: str = "/api/v1"
+    
+    # Database
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/bulleye"
+    
+    # AI Engine
+    CLAUDE_API_KEY: str = ""
+    OPENAI_API_KEY: str = ""
+
+    # Auth
+    JWT_SECRET_KEY: str = "change-this-in-production"
+    JWT_ALGORITHM: str = "HS256"
+    JWT_EXPIRE_HOURS: int = 72
+    
+    # Data Providers
+    TUSHARE_TOKEN: str = ""
+    STOCK_DATA_PROVIDER: str = "mock"  # mock | real
+    REALTIME_DATA_SOURCE: str = "eastmoney"  # eastmoney | tushare
+    WECHAT_PAY_CALLBACK_SECRET: str = ""
+    LOGIN_CODE_MODE: str = "mock"  # mock | strict
+    SMS_CODE_WEBHOOK_URL: str = ""
+    EMAIL_CODE_WEBHOOK_URL: str = ""
+    
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+settings = Settings()
