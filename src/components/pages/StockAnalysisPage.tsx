@@ -15,7 +15,16 @@ import { fetchAnalysisHistory, requestStockAnalysis } from '@/lib/api';
 import { formatDate, t } from '@/lib/i18n';
 import { trackEvent } from '@/lib/analytics';
 
-function LoadingState() {
+function LoadingState({ elapsedSeconds }: { elapsedSeconds: number }) {
+  const phases = [
+    '连接实时行情...',
+    '获取资金流与筹码结构...',
+    '调用AI模型生成分析...',
+    '整理评分与关键区间...',
+    '生成最终报告...',
+  ];
+  const phaseIndex = Math.min(phases.length - 1, Math.floor(elapsedSeconds / 3));
+  const progress = Math.min(95, 20 + elapsedSeconds * 4);
   return (
     <div className="flex flex-col items-center justify-center py-20 space-y-6">
       <div className="relative">
@@ -29,7 +38,16 @@ function LoadingState() {
       </div>
       <div className="text-center">
         <p className="font-semibold text-dark-100">AI 正在深度分析中...</p>
-        <p className="text-xs text-dark-400 mt-1">正在计算五维模型评分</p>
+        <p className="text-xs text-dark-400 mt-1">{phases[phaseIndex]}</p>
+        <p className="text-[11px] text-dark-500 mt-1">已等待 {elapsedSeconds}s</p>
+      </div>
+      <div className="w-56">
+        <div className="h-1.5 rounded-full bg-dark-800 overflow-hidden">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-yellow-500 to-yellow-300 transition-all duration-1000"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
       </div>
       <div className="w-48 space-y-2">
         {['趋势模型', '资金流向', '筹码结构', '市场情绪', '基本面'].map((dim, i) => (
@@ -396,6 +414,7 @@ export default function StockAnalysisPage() {
     }>
   >([]);
   const [notice, setNotice] = useState<string | null>(null);
+  const [analyzingElapsed, setAnalyzingElapsed] = useState(0);
   const remaining = Math.max(0, (user?.daily_quota ?? 3) - (user?.daily_used ?? 0));
   const klineData = currentAnalysis
     ? generateMockKLineData(currentAnalysis.stock_code)
@@ -433,6 +452,25 @@ export default function StockAnalysisPage() {
     setHistoryOffset(0);
     void loadHistory(true);
   }, [token]);
+
+  useEffect(() => {
+    if (!isAnalyzing) {
+      setAnalyzingElapsed(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+      setAnalyzingElapsed(elapsed);
+      // 前端轮询式状态刷新：超过 20s 给出明确反馈，避免“卡住不动”的感知
+      if (elapsed >= 20) {
+        setNotice('分析仍在进行中，已自动持续等待并轮询状态...');
+      }
+    }, 1500);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [isAnalyzing]);
 
   const handleSelect = async (stock: SearchResult) => {
     trackEvent('stock_analysis_select', { code: stock.code });
@@ -532,7 +570,7 @@ export default function StockAnalysisPage() {
       {/* Search */}
       <SearchBar onSelect={handleSelect} placeholder={t('stock.searchPlaceholder')} />
 
-      {isAnalyzing && <LoadingState />}
+      {isAnalyzing && <LoadingState elapsedSeconds={analyzingElapsed} />}
 
       {notice && (
         <div

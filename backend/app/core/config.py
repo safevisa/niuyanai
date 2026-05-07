@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     ARK_MODEL: str = "doubao-seed-2-0-lite-260428"
     ARK_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
     ANALYSIS_REQUIRE_LLM: bool = True
-    ANALYSIS_TIMEOUT_SECONDS: int = 30
+    ANALYSIS_TIMEOUT_SECONDS: int = 35
 
     # Auth
     JWT_SECRET_KEY: str = "change-this-in-production"
