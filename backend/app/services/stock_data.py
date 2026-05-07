@@ -768,57 +768,67 @@ class StockDataService:
 
     @classmethod
     def _fetch_eastmoney_universe(cls) -> List[Dict[str, str]]:
-        fs = "m:1+t:2,m:1+t:23,m:0+t:6,m:0+t:80,m:0+t:81"
+        market_filters = [
+            "m:1+t:2",   # 上证A
+            "m:1+t:23",  # 科创板
+            "m:0+t:6",   # 深证主板
+            "m:0+t:80",  # 创业板
+            "m:0+t:81",  # 北交所/新三板集合（后续按代码过滤）
+        ]
         fields = "f12,f14,f13,f100"
         base_url = "https://push2.eastmoney.com/api/qt/clist/get"
         token = "D43BF722C8E33BDC906FB84D85E326E8"
-        page = 1
         page_size = 1000
         merged: List[Dict[str, str]] = []
         seen_codes: set[str] = set()
 
         with httpx.Client(timeout=8.0, follow_redirects=True) as client:
-            while page <= 20:
-                params = {
-                    "pn": str(page),
-                    "pz": str(page_size),
-                    "po": "1",
-                    "np": "1",
-                    "ut": token,
-                    "fltt": "2",
-                    "invt": "2",
-                    "fid": "f3",
-                    "fs": fs,
-                    "fields": fields,
-                }
-                response = client.get(base_url, params=params)
-                response.raise_for_status()
-                payload = response.json()
-                data = payload.get("data") or {}
-                diff = data.get("diff") or []
-                if not diff:
-                    break
+            for fs in market_filters:
+                page = 1
+                while page <= 20:
+                    params = {
+                        "pn": str(page),
+                        "pz": str(page_size),
+                        "po": "1",
+                        "np": "1",
+                        "ut": token,
+                        "fltt": "2",
+                        "invt": "2",
+                        "fid": "f3",
+                        "fs": fs,
+                        "fields": fields,
+                    }
+                    response = client.get(base_url, params=params)
+                    response.raise_for_status()
+                    payload = response.json()
+                    data = payload.get("data") or {}
+                    diff = data.get("diff") or []
+                    if not diff:
+                        break
 
-                for item in diff:
-                    code = str(item.get("f12", "")).strip()
-                    if len(code) != 6 or not code.isdigit() or code in seen_codes:
-                        continue
-                    seen_codes.add(code)
-                    market_num = str(item.get("f13", "")).strip()
-                    market = "SH" if market_num == "1" else ("BJ" if market_num == "0" and code.startswith(("4", "8")) else "SZ")
-                    name = str(item.get("f14", f"股票{code}")).strip() or f"股票{code}"
-                    industry = str(item.get("f100", "")).strip() or "未知"
-                    merged.append({
-                        "code": code,
-                        "name": name,
-                        "market": market,
-                        "industry": industry,
-                    })
+                    for item in diff:
+                        code = str(item.get("f12", "")).strip()
+                        if len(code) != 6 or not code.isdigit() or code in seen_codes:
+                            continue
+                        # 过滤新三板长尾，只保留A股常见段（6/0/3开头 + 北交所4/8/9开头）
+                        if not code.startswith(("6", "0", "3", "4", "8", "9")):
+                            continue
+                        seen_codes.add(code)
+                        market_num = str(item.get("f13", "")).strip()
+                        market = "SH" if market_num == "1" else ("BJ" if code.startswith(("4", "8", "9")) else "SZ")
+                        name = str(item.get("f14", f"股票{code}")).strip() or f"股票{code}"
+                        industry = str(item.get("f100", "")).strip() or "未知"
+                        merged.append({
+                            "code": code,
+                            "name": name,
+                            "market": market,
+                            "industry": industry,
+                        })
 
-                total = int(data.get("total", 0) or 0)
-                if total > 0 and page * page_size >= total:
-                    break
-                page += 1
+                    total = int(data.get("total", 0) or 0)
+                    if total > 0 and page * page_size >= total:
+                        break
+                    page += 1
 
         if not merged:
             raise RuntimeError("eastmoney universe is empty")
