@@ -30,7 +30,9 @@ app = FastAPI(
 
 @app.on_event("startup")
 def warmup_market_universe():
-    # 预热全市场股票池，减少首次搜索延迟
+    if not settings.STARTUP_WARMUP_ENABLED:
+        return
+    # 预热全市场股票池，减少首次搜索延迟（可开关，默认关闭避免冷启动超时）
     try:
         StockDataService.warmup_universe()
     except Exception:
@@ -61,7 +63,7 @@ LOGIN_FAIL_STORE: Dict[str, Dict[str, Any]] = {}
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], # In production, restrict this to frontend domain
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -392,11 +394,21 @@ def search_stocks(q: str, limit: int = 12, db: Session = Depends(get_db)):
     if len(query) > 20:
         raise HTTPException(status_code=400, detail="Query too long")
     safe_limit = min(max(limit, 1), 100)
-    StockDataService.ensure_stock_master(db)
+    try:
+        total = StockDataService.get_market_total_db(db, query)
+        if total > 0:
+            return {
+                "status": "success",
+                "data": StockDataService.search_stocks_db(db, query, limit=safe_limit),
+                "total": total,
+            }
+    except Exception:
+        pass
+    # 数据库不可用或未同步时，直接走内存数据，保证搜索可用
     return {
         "status": "success",
-        "data": StockDataService.search_stocks_db(db, query, limit=safe_limit),
-        "total": StockDataService.get_market_total_db(db, query),
+        "data": StockDataService.search_stocks(query, limit=safe_limit),
+        "total": StockDataService.get_market_total(query),
     }
 
 @app.get("/api/market/industry-rotation")
@@ -411,12 +423,20 @@ def get_industry_rotation(limit: int = 8):
 def list_market_stocks(q: str = "", limit: int = 30, offset: int = 0, db: Session = Depends(get_db)):
     safe_limit = min(max(limit, 1), 100)
     safe_offset = max(offset, 0)
-    StockDataService.ensure_stock_master(db)
-    total = StockDataService.get_market_total_db(db, q=q)
+    try:
+        total = StockDataService.get_market_total_db(db, q=q)
+        if total > 0:
+            return {
+                "status": "success",
+                "data": StockDataService.list_market_stocks_db(db, q=q, limit=safe_limit, offset=safe_offset),
+                "total": total,
+            }
+    except Exception:
+        pass
     return {
         "status": "success",
-        "data": StockDataService.list_market_stocks_db(db, q=q, limit=safe_limit, offset=safe_offset),
-        "total": total,
+        "data": StockDataService.list_market_stocks(q=q, limit=safe_limit, offset=safe_offset),
+        "total": StockDataService.get_market_total(q=q),
     }
 
 @app.post("/api/tools/screener")

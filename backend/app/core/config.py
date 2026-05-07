@@ -6,7 +6,8 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # Database
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/bulleye"
+    # Railway/本地默认使用 sqlite，避免未配置外部数据库时服务启动失败
+    DATABASE_URL: str = "sqlite:///./bulleye.db"
     
     # AI Engine
     CLAUDE_API_KEY: str = ""
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     LOGIN_CODE_MODE: str = "mock"  # mock | strict
     SMS_CODE_WEBHOOK_URL: str = ""
     EMAIL_CODE_WEBHOOK_URL: str = ""
+    STARTUP_WARMUP_ENABLED: bool = False
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
