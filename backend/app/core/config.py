@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     # AI Engine
     CLAUDE_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
+    OPENAI_MODEL: str = "gpt-4.1-mini"
 
     # Auth
     JWT_SECRET_KEY: str = "change-this-in-production"

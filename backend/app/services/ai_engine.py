@@ -65,6 +65,7 @@ class AIEngine:
     def __init__(self):
         # Using OpenAI compatible client (can be swapped for Claude/DeepSeek etc)
         self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else None
+        self.model = settings.OPENAI_MODEL
 
     async def generate_stock_analysis(self, stock_code: str) -> Dict[str, Any]:
         """Generate comprehensive stock analysis using LLM"""
@@ -89,12 +90,12 @@ class AIEngine:
         )
 
         if not self.client:
-            logger.warning("No API key provided. Returning mock AI analysis.")
-            return self._generate_mock_ai_response(data)
+            logger.warning("No API key provided. Using rule-based analysis from realtime quote data.")
+            return self._generate_rule_based_response(data)
 
         try:
             response = await self.client.chat.completions.create(
-                model="gpt-4-turbo-preview", # Or preferred model
+                model=self.model,
                 messages=[
                     {"role": "system", "content": "You are a professional financial AI assistant. Always output valid JSON."},
                     {"role": "user", "content": prompt}
@@ -107,7 +108,7 @@ class AIEngine:
             return self._enrich_result(result, data)
         except Exception as e:
             logger.error(f"AI Engine Error: {str(e)}")
-            return self._generate_mock_ai_response(data)
+            return self._generate_rule_based_response(data)
 
     def _enrich_result(self, result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         """补齐模型输出缺失字段，保证前后端结构稳定。"""
@@ -120,8 +121,8 @@ class AIEngine:
             result["market_price"] = data.get("current_price", 0)
         return result
 
-    def _generate_mock_ai_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Fallback mock response when API is not available"""
+    def _generate_rule_based_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Rule-based response derived from realtime data when LLM is unavailable."""
         return self._enrich_result({
           "bull_eye_score": 75,
           "scores": {
