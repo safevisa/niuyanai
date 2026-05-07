@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     LOGIN_CODE_MODE: str = "mock"  # mock | strict
     SMS_CODE_WEBHOOK_URL: str = ""
     EMAIL_CODE_WEBHOOK_URL: str = ""
-    STARTUP_WARMUP_ENABLED: bool = False
+    STARTUP_WARMUP_ENABLED: bool = True
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

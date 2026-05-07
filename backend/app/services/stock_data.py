@@ -59,6 +59,8 @@ class StockDataService:
     _universe_cache: List[Dict[str, str]] = []
     _universe_cache_loaded_at: datetime | None = None
     _universe_cache_ttl_seconds: int = 6 * 60 * 60
+    _stock_master_synced_at: datetime | None = None
+    _stock_master_target_min_count: int = 5000
 
     @classmethod
     def sync_stock_master(cls, db: Session) -> int:
@@ -88,6 +90,7 @@ class StockDataService:
                 )
             upserted += 1
         db.commit()
+        cls._stock_master_synced_at = datetime.now(timezone.utc)
         return upserted
 
     @classmethod
@@ -104,11 +107,22 @@ class StockDataService:
         ]
 
     @classmethod
-    def ensure_stock_master(cls, db: Session) -> int:
+    def ensure_stock_master(cls, db: Session, force: bool = False) -> int:
         count = db.query(StockMaster).filter(StockMaster.list_status == "listed").count()
-        if count == 0:
+        if force or count < cls._stock_master_target_min_count:
             return cls.sync_stock_master(db)
         return count
+
+    @classmethod
+    def get_stock_master_cache_status(cls, db: Session) -> Dict[str, Any]:
+        count = db.query(StockMaster).filter(StockMaster.list_status == "listed").count()
+        return {
+            "cached_count": count,
+            "target_min_count": cls._stock_master_target_min_count,
+            "ready": count >= cls._stock_master_target_min_count,
+            "stock_master_synced_at": cls._stock_master_synced_at.isoformat() if cls._stock_master_synced_at else None,
+            "universe_cache_loaded_at": cls._universe_cache_loaded_at.isoformat() if cls._universe_cache_loaded_at else None,
+        }
 
     @classmethod
     def _find_stock(cls, stock_code: str) -> Dict[str, str]:

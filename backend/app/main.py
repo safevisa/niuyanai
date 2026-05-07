@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional
 from typing import List
 import random
 import re
+import threading
 
 from app.core.config import settings
 from app.db.database import engine, Base, get_db, SessionLocal
@@ -32,23 +33,27 @@ app = FastAPI(
 def warmup_market_universe():
     if not settings.STARTUP_WARMUP_ENABLED:
         return
-    # 预热全市场股票池，减少首次搜索延迟（可开关，默认关闭避免冷启动超时）
-    try:
-        StockDataService.warmup_universe()
-    except Exception:
-        pass
-    db = None
-    try:
-        db = SessionLocal()
-        StockDataService.ensure_stock_master(db)
-    except Exception:
-        pass
-    finally:
-        if db is not None:
-            try:
-                db.close()
-            except Exception:
-                pass
+
+    # 冷启动不阻塞请求：后台线程同步 5000+ 股票池到后端缓存库
+    def _warmup_job():
+        try:
+            StockDataService.warmup_universe()
+        except Exception:
+            pass
+        db = None
+        try:
+            db = SessionLocal()
+            StockDataService.ensure_stock_master(db, force=True)
+        except Exception:
+            pass
+        finally:
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+
+    threading.Thread(target=_warmup_job, daemon=True).start()
 
 FREE_DAILY_ANALYSIS_QUOTA = 3
 LOGIN_CODE_TTL_SECONDS = 300
@@ -438,6 +443,31 @@ def list_market_stocks(q: str = "", limit: int = 30, offset: int = 0, db: Sessio
         "data": StockDataService.list_market_stocks(q=q, limit=safe_limit, offset=safe_offset),
         "total": StockDataService.get_market_total(q=q),
     }
+
+
+@app.get("/api/market/cache/status")
+def get_market_cache_status(db: Session = Depends(get_db)):
+    try:
+        return {
+            "status": "success",
+            "data": StockDataService.get_stock_master_cache_status(db),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"cache status failed: {exc}")
+
+
+@app.post("/api/market/cache/sync")
+def sync_market_cache(db: Session = Depends(get_db)):
+    try:
+        count = StockDataService.ensure_stock_master(db, force=True)
+        return {
+            "status": "success",
+            "data": {
+                "cached_count": count,
+            },
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"sync failed: {exc}")
 
 @app.post("/api/tools/screener")
 def run_screener(payload: ScreenerRequest):

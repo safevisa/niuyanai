@@ -7,6 +7,7 @@ import { getMockMarketOverview } from '@/lib/mockData';
 import type { MarketOverview, SearchResult } from '@/types';
 import { useAppStore } from '@/store';
 import { generateDailyReport, type DailyReport } from '@/lib/api';
+import { fetchIndustryRotation, fetchMarketStocksPage } from '@/lib/api';
 import { t } from '@/lib/i18n';
 import { trackEvent } from '@/lib/analytics';
 import { getAnalysisWithCache, isAnalysisFresh } from '@/lib/analysisCache';
@@ -222,7 +223,49 @@ export default function HomePage() {
 
   useEffect(() => {
     setMounted(true);
-    setTimeout(() => setOverview(getMockMarketOverview()), 500);
+    const loadOverview = async () => {
+      try {
+        const [market, sectors] = await Promise.all([
+          fetchMarketStocksPage('', 200, 0),
+          fetchIndustryRotation(8),
+        ]);
+        const rows = market.rows;
+        if (!rows.length) {
+          setOverview(getMockMarketOverview());
+          return;
+        }
+        const rise = rows.filter((r) => (r.pct_change ?? 0) >= 0).length;
+        const fall = Math.max(0, rows.length - rise);
+        const avgPct = rows.reduce((sum, r) => sum + (r.pct_change ?? 0), 0) / rows.length;
+        const sentimentScore = Math.max(0, Math.min(100, Math.round(50 + avgPct * 4)));
+        const hotSectors = sectors.slice(0, 4).map((s) => ({
+          name: s.name,
+          change_pct: Number(s.week_change ?? 0),
+          capital_net: Number(s.week_change ?? 0),
+          lead_stock: s.lead_stock ?? s.name,
+        }));
+        const coldSectors = [...hotSectors]
+          .sort((a, b) => a.change_pct - b.change_pct)
+          .slice(0, 3);
+
+        setOverview({
+          sentiment_score: sentimentScore,
+          sentiment_label: sentimentScore >= 60 ? '偏热' : sentimentScore <= 40 ? '偏冷' : '中性',
+          advance_count: rise,
+          decline_count: fall,
+          limit_up: rows.filter((r) => (r.pct_change ?? 0) >= 9.5).length,
+          limit_down: rows.filter((r) => (r.pct_change ?? 0) <= -9.5).length,
+          main_capital_net: Number(avgPct.toFixed(2)),
+          hot_sectors: hotSectors.length ? hotSectors : getMockMarketOverview().hot_sectors,
+          cold_sectors: coldSectors.length ? coldSectors : getMockMarketOverview().cold_sectors,
+        });
+      } catch {
+        setOverview(getMockMarketOverview());
+      }
+    };
+    void loadOverview();
+    const timer = window.setInterval(() => void loadOverview(), 60_000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const handleStockSelect = async (stock: SearchResult) => {

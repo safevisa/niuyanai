@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Search, X, Clock, TrendingUp } from 'lucide-react';
 import { searchStocks } from '@/lib/mockData';
 import { fetchMarketStocksPage, searchStocksRemotePage } from '@/lib/api';
@@ -28,71 +28,75 @@ export default function SearchBar({
   const inputRef = useRef<HTMLInputElement>(null);
   const { searchHistory, addToSearchHistory, priorityPinnedCodes, togglePriorityPinnedCode } = useAppStore();
 
-  useEffect(() => {
-    const q = query.trim();
-    const timer = setTimeout(async () => {
-      if (!q) {
-        setResults([]);
-        setSearchTotal(null);
-        setSelectedIndex(-1);
-        setIsSearching(false);
-        return;
-      }
+  const executeSearch = useCallback(async (rawQuery: string) => {
+    const q = rawQuery.trim();
+    if (!q) {
+      setResults([]);
+      setSearchTotal(null);
+      setSelectedIndex(-1);
+      setIsSearching(false);
+      return;
+    }
 
-      setIsSearching(true);
-      try {
-        const remotePage = await searchStocksRemotePage(q, 30);
-        const remote = remotePage.rows;
-        setSearchTotal(remotePage.total);
-        if (remote.length > 0) {
-          setResults(remote);
-        } else if (/^\d{6}$/.test(q)) {
-          setResults([{
-            code: q,
-            name: `股票${q}`,
-            market: q.startsWith('6') ? 'SH' : 'SZ',
-            industry: '未知',
-          }]);
+    setIsSearching(true);
+    try {
+      const remotePage = await searchStocksRemotePage(q, 30);
+      const remote = remotePage.rows;
+      setSearchTotal(remotePage.total);
+      if (remote.length > 0) {
+        setResults(remote);
+      } else if (/^\d{6}$/.test(q)) {
+        setResults([{
+          code: q,
+          name: `股票${q}`,
+          market: q.startsWith('6') ? 'SH' : 'SZ',
+          industry: '未知',
+        }]);
+      } else {
+        // 深度补偿：当搜索接口返回空时，回退到全市场列表检索
+        const marketPage = await fetchMarketStocksPage(q, 30, 0);
+        if (marketPage.rows.length > 0) {
+          setSearchTotal(marketPage.total);
+          setResults(
+            marketPage.rows.map((row) => ({
+              code: row.code,
+              name: row.name,
+              market: row.market,
+              industry: row.industry,
+              as_of: row.as_of,
+            }))
+          );
         } else {
-          // 深度补偿：当搜索接口返回空时，回退到全市场列表检索
-          const marketPage = await fetchMarketStocksPage(q, 30, 0);
-          if (marketPage.rows.length > 0) {
-            setSearchTotal(marketPage.total);
-            setResults(
-              marketPage.rows.map((row) => ({
-                code: row.code,
-                name: row.name,
-                market: row.market,
-                industry: row.industry,
-                as_of: row.as_of,
-              }))
-            );
-          } else {
-            setResults(searchStocks(q));
-          }
+          setResults(searchStocks(q));
         }
-      } catch {
-        const local = searchStocks(q);
-        setSearchTotal(null);
-        if (local.length > 0) {
-          setResults(local);
-        } else if (/^\d{6}$/.test(q)) {
-          setResults([{
-            code: q,
-            name: `股票${q}`,
-            market: q.startsWith('6') ? 'SH' : 'SZ',
-            industry: '未知',
-          }]);
-        } else {
-          setResults([]);
-        }
-      } finally {
-        setSelectedIndex(-1);
-        setIsSearching(false);
       }
+    } catch {
+      const local = searchStocks(q);
+      setSearchTotal(null);
+      if (local.length > 0) {
+        setResults(local);
+      } else if (/^\d{6}$/.test(q)) {
+        setResults([{
+          code: q,
+          name: `股票${q}`,
+          market: q.startsWith('6') ? 'SH' : 'SZ',
+          industry: '未知',
+        }]);
+      } else {
+        setResults([]);
+      }
+    } finally {
+      setSelectedIndex(-1);
+      setIsSearching(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      await executeSearch(query);
     }, 200);
     return () => clearTimeout(timer);
-  }, [query]);
+  }, [query, executeSearch]);
 
   const handleSelect = (stock: SearchResult) => {
     addToSearchHistory(`${stock.code} ${stock.name}`);
@@ -167,6 +171,17 @@ export default function SearchBar({
             <X size={16} />
           </button>
         )}
+        <button
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            setFocused(true);
+            void executeSearch(query);
+          }}
+          className="btn-primary text-xs px-3 py-1.5"
+          aria-label="执行搜索"
+        >
+          搜索
+        </button>
       </div>
 
       {/* Dropdown */}
