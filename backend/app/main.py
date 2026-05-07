@@ -58,7 +58,7 @@ def warmup_market_universe():
     threading.Thread(target=_warmup_job, daemon=True).start()
 
 FREE_DAILY_ANALYSIS_QUOTA = 3
-ANALYSIS_TIMEOUT_SECONDS = 15
+ANALYSIS_TIMEOUT_SECONDS = max(10, min(settings.ANALYSIS_TIMEOUT_SECONDS, 60))
 LOGIN_CODE_TTL_SECONDS = 300
 LOGIN_CODE_STORE: Dict[str, Dict[str, Any]] = {}
 LOGIN_CODE_SEND_COOLDOWN_SECONDS = 60
