@@ -371,20 +371,6 @@ async def _run_public_analysis_task(task_id: str, stock_code: str, guest_key: st
     try:
         _set_task_state(task_id, status="running", progress=10, message="检查游客配额")
         quota_before = get_guest_quota_state_by_key(guest_key)
-        cached = get_guest_cached_analysis_by_key(guest_key, stock_code)
-        if cached:
-            _set_task_state(
-                task_id,
-                status="success",
-                progress=100,
-                message="命中当天缓存",
-                result={
-                    "status": "success",
-                    "data": cached,
-                    "quota": {**quota_before, "from_cache": True},
-                },
-            )
-            return
         if quota_before["daily_used"] >= FREE_DAILY_ANALYSIS_QUOTA:
             _set_task_state(
                 task_id,
@@ -399,8 +385,7 @@ async def _run_public_analysis_task(task_id: str, stock_code: str, guest_key: st
             ai_engine.generate_stock_analysis(stock_code),
             timeout=ANALYSIS_TIMEOUT_SECONDS,
         )
-        _set_task_state(task_id, progress=85, message="保存当天缓存")
-        save_guest_cached_analysis_by_key(guest_key, stock_code, analysis_result)
+        _set_task_state(task_id, progress=85, message="更新游客配额")
         quota = consume_guest_daily_quota_by_key(guest_key)
         _set_task_state(
             task_id,
@@ -434,25 +419,6 @@ async def _run_user_analysis_task(task_id: str, stock_code: str, user_id: str) -
 
         _set_task_state(task_id, status="running", progress=10, message="检查用户配额")
         daily_used = normalize_user_daily_usage(db, user)
-        today_record = get_today_analysis_record(db, user.id, stock_code)
-        if today_record and isinstance(today_record.ai_analysis, dict):
-            _set_task_state(
-                task_id,
-                status="success",
-                progress=100,
-                message="命中当天缓存",
-                result={
-                    "status": "success",
-                    "data": today_record.ai_analysis,
-                    "quota": {
-                        "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
-                        "daily_used": daily_used,
-                        "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - daily_used),
-                        "from_cache": True,
-                    },
-                },
-            )
-            return
         if daily_used >= FREE_DAILY_ANALYSIS_QUOTA:
             _set_task_state(
                 task_id,
@@ -473,40 +439,22 @@ async def _run_user_analysis_task(task_id: str, stock_code: str, user_id: str) -
         target_stock_code = analysis_result.get("stock_code", stock_code)
         target_stock_name = analysis_result.get("stock_name", f"Stock_{stock_code}")
         now_utc = datetime.now(timezone.utc)
-        analysis_record = (
-            db.query(Analysis)
-            .filter(Analysis.user_id == user.id, Analysis.stock_code == target_stock_code)
-            .order_by(Analysis.created_at.desc())
-            .first()
-        )
-        if analysis_record:
-            analysis_record.stock_name = target_stock_name
-            analysis_record.analysis_date = now_utc
-            analysis_record.bull_eye_score = analysis_result.get("bull_eye_score", 0)
-            analysis_record.trend_score = scores.get("trend", 0)
-            analysis_record.capital_score = scores.get("capital", 0)
-            analysis_record.chip_score = scores.get("chip", 0)
-            analysis_record.sentiment_score = scores.get("sentiment", 0)
-            analysis_record.fundamental_score = scores.get("fundamental", 0)
-            analysis_record.ai_analysis = analysis_result
-            analysis_record.market_price = analysis_result.get("market_price", 0)
-        else:
-            db.add(
-                Analysis(
-                    user_id=user.id,
-                    stock_code=target_stock_code,
-                    stock_name=target_stock_name,
-                    analysis_date=now_utc,
-                    bull_eye_score=analysis_result.get("bull_eye_score", 0),
-                    trend_score=scores.get("trend", 0),
-                    capital_score=scores.get("capital", 0),
-                    chip_score=scores.get("chip", 0),
-                    sentiment_score=scores.get("sentiment", 0),
-                    fundamental_score=scores.get("fundamental", 0),
-                    ai_analysis=analysis_result,
-                    market_price=analysis_result.get("market_price", 0),
-                )
+        db.add(
+            Analysis(
+                user_id=user.id,
+                stock_code=target_stock_code,
+                stock_name=target_stock_name,
+                analysis_date=now_utc,
+                bull_eye_score=analysis_result.get("bull_eye_score", 0),
+                trend_score=scores.get("trend", 0),
+                capital_score=scores.get("capital", 0),
+                chip_score=scores.get("chip", 0),
+                sentiment_score=scores.get("sentiment", 0),
+                fundamental_score=scores.get("fundamental", 0),
+                ai_analysis=analysis_result,
+                market_price=analysis_result.get("market_price", 0),
             )
+        )
         user.daily_quota = FREE_DAILY_ANALYSIS_QUOTA
         user.daily_used = daily_used + 1
         db.add(user)
@@ -1264,19 +1212,6 @@ async def trigger_stock_analysis(
     """Trigger AI analysis for a given stock"""
     try:
         daily_used = normalize_user_daily_usage(db, current_user)
-        today_record = get_today_analysis_record(db, current_user.id, stock_code)
-        if today_record and isinstance(today_record.ai_analysis, dict):
-            return {
-                "status": "success",
-                "data": today_record.ai_analysis,
-                "quota": {
-                    "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
-                    "daily_used": daily_used,
-                    "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - daily_used),
-                    "from_cache": True,
-                },
-            }
-
         if daily_used >= FREE_DAILY_ANALYSIS_QUOTA:
             raise HTTPException(
                 status_code=429,
@@ -1299,44 +1234,21 @@ async def trigger_stock_analysis(
         target_stock_name = analysis_result.get("stock_name", f"Stock_{stock_code}")
         now_utc = datetime.now(timezone.utc)
 
-        # 历史去重策略：同一用户同一股票保留一条最新记录，重复分析覆盖更新。
-        analysis_record = (
-            db.query(Analysis)
-            .filter(
-                Analysis.user_id == current_user.id,
-                Analysis.stock_code == target_stock_code,
-            )
-            .order_by(Analysis.created_at.desc())
-            .first()
+        analysis_record = Analysis(
+            user_id=current_user.id,
+            stock_code=target_stock_code,
+            stock_name=target_stock_name,
+            analysis_date=now_utc,
+            bull_eye_score=analysis_result.get("bull_eye_score", 0),
+            trend_score=scores.get("trend", 0),
+            capital_score=scores.get("capital", 0),
+            chip_score=scores.get("chip", 0),
+            sentiment_score=scores.get("sentiment", 0),
+            fundamental_score=scores.get("fundamental", 0),
+            ai_analysis=analysis_result,
+            market_price=analysis_result.get("market_price", 0),
         )
-
-        if analysis_record:
-            analysis_record.stock_name = target_stock_name
-            analysis_record.analysis_date = now_utc
-            analysis_record.bull_eye_score = analysis_result.get("bull_eye_score", 0)
-            analysis_record.trend_score = scores.get("trend", 0)
-            analysis_record.capital_score = scores.get("capital", 0)
-            analysis_record.chip_score = scores.get("chip", 0)
-            analysis_record.sentiment_score = scores.get("sentiment", 0)
-            analysis_record.fundamental_score = scores.get("fundamental", 0)
-            analysis_record.ai_analysis = analysis_result
-            analysis_record.market_price = analysis_result.get("market_price", 0)
-        else:
-            analysis_record = Analysis(
-                user_id=current_user.id,
-                stock_code=target_stock_code,
-                stock_name=target_stock_name,
-                analysis_date=now_utc,
-                bull_eye_score=analysis_result.get("bull_eye_score", 0),
-                trend_score=scores.get("trend", 0),
-                capital_score=scores.get("capital", 0),
-                chip_score=scores.get("chip", 0),
-                sentiment_score=scores.get("sentiment", 0),
-                fundamental_score=scores.get("fundamental", 0),
-                ai_analysis=analysis_result,
-                market_price=analysis_result.get("market_price", 0),
-            )
-            db.add(analysis_record)
+        db.add(analysis_record)
 
         current_user.daily_quota = FREE_DAILY_ANALYSIS_QUOTA
         current_user.daily_used = daily_used + 1
@@ -1365,16 +1277,6 @@ async def trigger_stock_analysis_public(stock_code: str, request: Request):
     """Public analysis endpoint for guest mode without auth/history persistence."""
     try:
         quota_before = get_guest_quota_state(request)
-        cached = get_guest_cached_analysis(request, stock_code)
-        if cached:
-            return {
-                "status": "success",
-                "data": cached,
-                "quota": {
-                    **quota_before,
-                    "from_cache": True,
-                },
-            }
         if quota_before["daily_used"] >= FREE_DAILY_ANALYSIS_QUOTA:
             raise HTTPException(
                 status_code=429,
@@ -1390,7 +1292,6 @@ async def trigger_stock_analysis_public(stock_code: str, request: Request):
                 status_code=504,
                 detail=f"analysis timeout: exceeded {ANALYSIS_TIMEOUT_SECONDS}s",
             )
-        save_guest_cached_analysis(request, stock_code, analysis_result)
         quota = consume_guest_daily_quota(request)
         return {
             "status": "success",
