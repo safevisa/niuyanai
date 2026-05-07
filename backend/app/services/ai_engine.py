@@ -184,7 +184,7 @@ class AIEngine:
             "Authorization": f"Bearer {settings.ARK_API_KEY}",
             "Content-Type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(endpoint, headers=headers, json=payload)
             response.raise_for_status()
             data = response.json()
@@ -192,16 +192,41 @@ class AIEngine:
         text = self._extract_response_text(data)
         if not text:
             raise RuntimeError(f"empty Doubao text: {data}")
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except Exception as e:
+            raise RuntimeError(f"Doubao JSON parse failed: {e}; raw_text={text[:300]}")
 
     def _extract_response_text(self, payload: Dict[str, Any]) -> str:
         """兼容 responses 风格返回，尽量提取模型文本输出。"""
+        output = payload.get("output")
+        if isinstance(output, list):
+            chunks: list[str] = []
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") != "message":
+                    continue
+                content = item.get("content")
+                if not isinstance(content, list):
+                    continue
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "output_text" and isinstance(part.get("text"), str):
+                        text = part["text"].strip()
+                        if text:
+                            chunks.append(text)
+            if chunks:
+                return "\n".join(chunks).strip()
+
+        # Fallback for other potential payload shapes.
         collected: list[str] = []
 
         def walk(node: Any) -> None:
             if isinstance(node, dict):
                 for key, value in node.items():
-                    if key in {"text", "output_text"} and isinstance(value, str):
+                    if key in {"output_text", "text"} and isinstance(value, str):
                         collected.append(value)
                     else:
                         walk(value)
@@ -210,7 +235,7 @@ class AIEngine:
                     walk(item)
 
         walk(payload)
-        return "\n".join([part.strip() for part in collected if part and part.strip()]).strip()
+        return "\n".join(part.strip() for part in collected if part and part.strip()).strip()
 
     def _enrich_result(self, result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         """补齐模型输出缺失字段，保证前后端结构稳定。"""
