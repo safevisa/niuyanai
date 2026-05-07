@@ -822,19 +822,19 @@ class StockDataService:
             "m:1+t:23",  # 科创板
             "m:0+t:6",   # 深证主板
             "m:0+t:80",  # 创业板
-            "m:0+t:81",  # 北交所/新三板集合（后续按代码过滤）
+            # 注意：m:0+t:81 覆盖范围过广（含新三板长尾），先以 A 股主市场为主，保证质量和稳定性
         ]
         fields = "f12,f14,f13,f100"
         base_url = "https://push2.eastmoney.com/api/qt/clist/get"
         token = "D43BF722C8E33BDC906FB84D85E326E8"
-        page_size = 1000
+        page_size = 200
         merged: List[Dict[str, str]] = []
         seen_codes: set[str] = set()
 
         with httpx.Client(timeout=8.0, follow_redirects=True) as client:
             for fs in market_filters:
                 page = 1
-                while page <= 20:
+                while page <= 200:
                     params = {
                         "pn": str(page),
                         "pz": str(page_size),
@@ -875,7 +875,11 @@ class StockDataService:
                         })
 
                     total = int(data.get("total", 0) or 0)
-                    if total > 0 and page * page_size >= total:
+                    actual_page_size = len(diff)
+                    if actual_page_size <= 0:
+                        break
+                    # 关键修复：按接口实际返回条数判断翻页结束，避免把 page_size=200 当成真实页容量
+                    if total > 0 and page * actual_page_size >= total:
                         break
                     page += 1
 
