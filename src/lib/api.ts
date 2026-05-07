@@ -367,8 +367,11 @@ function normalizeAnalysis(stock: SearchResult, data: Partial<StockAnalysis>): S
 }
 
 export async function requestStockAnalysis(stock: SearchResult, token?: string): Promise<StockAnalysis> {
+  const endpoint = token
+    ? `/api/analysis/stock/${encodeURIComponent(stock.code)}`
+    : `/api/public/analysis/stock/${encodeURIComponent(stock.code)}`;
   const response = await fetch(
-    `${API_BASE_URL}/api/analysis/stock/${encodeURIComponent(stock.code)}`,
+    `${API_BASE_URL}${endpoint}`,
     {
       method: 'POST',
       headers: authHeaders(token),

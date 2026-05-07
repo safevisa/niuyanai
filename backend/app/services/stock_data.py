@@ -271,42 +271,79 @@ class StockDataService:
                 return cls._get_stock_basic_mock(stock_code)
         return cls._get_stock_basic_mock(stock_code)
 
-    @staticmethod
-    def get_technical_indicators(stock_code: str) -> Dict[str, Any]:
-        """Fetch technical indicators (MA, MACD, BOLL)"""
+    @classmethod
+    def get_technical_indicators(cls, basic: Dict[str, Any]) -> Dict[str, Any]:
+        """Derive technical status from real-time price change (deterministic)."""
+        pct_change = cls._safe_float(basic.get("pct_change"), 0.0)
+        if pct_change >= 3:
+            ma_status = "多头排列"
+            macd_status = "金叉"
+            boll_position = "上轨"
+        elif pct_change >= 0.5:
+            ma_status = "走平"
+            macd_status = "零轴附近纠缠"
+            boll_position = "中轨偏上"
+        elif pct_change <= -3:
+            ma_status = "空头排列"
+            macd_status = "死叉"
+            boll_position = "下轨"
+        elif pct_change <= -0.5:
+            ma_status = "均线纠缠"
+            macd_status = "顶背离"
+            boll_position = "中轨偏下"
+        else:
+            ma_status = "走平"
+            macd_status = "零轴附近纠缠"
+            boll_position = "中轨偏下"
         return {
-            "ma_status": random.choice(["多头排列", "空头排列", "均线纠缠", "走平"]),
-            "macd_status": random.choice(["金叉", "死叉", "顶背离", "底背离", "零轴附近纠缠"]),
-            "boll_position": random.choice(["上轨", "中轨偏上", "中轨偏下", "下轨"]),
+            "ma_status": ma_status,
+            "macd_status": macd_status,
+            "boll_position": boll_position,
         }
 
-    @staticmethod
-    def get_capital_flow(stock_code: str) -> Dict[str, Any]:
-        """Fetch capital flow data"""
-        net_inflow = round(random.uniform(-5, 5), 2)
+    @classmethod
+    def get_capital_flow(cls, basic: Dict[str, Any]) -> Dict[str, Any]:
+        """Derive capital flow summary from real-time change (deterministic)."""
+        pct_change = cls._safe_float(basic.get("pct_change"), 0.0)
+        net_inflow = round(pct_change * 1.8, 2)
+        if pct_change >= 2:
+            flow_status = "持续流入"
+        elif pct_change >= 0:
+            flow_status = "震荡流入"
+        elif pct_change <= -2:
+            flow_status = "持续流出"
+        else:
+            flow_status = "震荡流出"
         return {
-            "capital_flow_5d": random.choice(["持续流入", "持续流出", "震荡流入", "震荡流出"]),
+            "capital_flow_5d": flow_status,
             "main_capital_net": f"{'+' if net_inflow > 0 else ''}{net_inflow}亿",
         }
 
-    @staticmethod
-    def get_chip_distribution(stock_code: str) -> Dict[str, Any]:
-        """Fetch chip distribution (获利盘, 套牢盘, 集中度)"""
-        profit_ratio = round(random.uniform(0, 100), 1)
+    @classmethod
+    def get_chip_distribution(cls, basic: Dict[str, Any]) -> Dict[str, Any]:
+        """Derive chip distribution from valuation and momentum (deterministic)."""
+        pe = cls._safe_float(basic.get("pe"), 20.0)
+        pct_change = cls._safe_float(basic.get("pct_change"), 0.0)
+        base_profit = 50 + pct_change * 3
+        if pe > 80:
+            base_profit -= 10
+        elif pe < 20:
+            base_profit += 8
+        profit_ratio = round(max(5.0, min(95.0, base_profit)), 1)
         loss_ratio = round(100 - profit_ratio, 1)
+        concentration = round(max(35.0, min(92.0, 70 - abs(pct_change) * 3 + (20 - min(pe, 20)) * 0.6)), 1)
         return {
-            "chip_concentration": f"{round(random.uniform(40, 90), 1)}%",
+            "chip_concentration": f"{concentration}%",
             "profit_chip_ratio": f"{profit_ratio}%",
             "loss_chip_ratio": f"{loss_ratio}%",
         }
 
     @classmethod
     def get_full_analysis_data(cls, stock_code: str) -> Dict[str, Any]:
-        data = {}
-        data.update(cls.get_stock_basic(stock_code))
-        data.update(cls.get_technical_indicators(stock_code))
-        data.update(cls.get_capital_flow(stock_code))
-        data.update(cls.get_chip_distribution(stock_code))
+        data = cls.get_stock_basic(stock_code)
+        data.update(cls.get_technical_indicators(data))
+        data.update(cls.get_capital_flow(data))
+        data.update(cls.get_chip_distribution(data))
         return data
 
     @staticmethod

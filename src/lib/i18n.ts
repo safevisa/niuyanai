@@ -7,6 +7,7 @@ const messages = {
       recentAnalyses: '最近分析',
       scoreSuffix: '分',
       fallbackNotice: '后端暂不可用，当前显示模拟分析结果',
+      analysisRequestFailed: '实时分析请求失败，请稍后重试',
       historyLoadFailed: '历史记录加载失败',
       dataAsOfPrefix: '数据时间',
       historyTitle: '分析历史',

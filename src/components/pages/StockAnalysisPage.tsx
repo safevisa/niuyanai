@@ -10,7 +10,7 @@ import Disclaimer from '@/components/Disclaimer';
 import SearchBar from '@/components/SearchBar';
 import { useAppStore } from '@/store';
 import type { StockAnalysis, SearchResult } from '@/types';
-import { generateMockKLineData, generateMockAnalysis } from '@/lib/mockData';
+import { generateMockKLineData } from '@/lib/mockData';
 import { fetchAnalysisHistory, requestStockAnalysis } from '@/lib/api';
 import { formatDate, t } from '@/lib/i18n';
 import { trackEvent } from '@/lib/analytics';
@@ -453,9 +453,8 @@ export default function StockAnalysisPage() {
         setCurrentAnalysis(null);
         setNotice(t('stock.quotaExceeded'));
       } else {
-        const analysis = generateMockAnalysis(stock.code);
-        setCurrentAnalysis(analysis);
-        setNotice(t('stock.fallbackNotice'));
+        setCurrentAnalysis(null);
+        setNotice(t('stock.analysisRequestFailed'));
       }
       trackEvent('stock_analysis_request_failed');
     }

@@ -286,9 +286,8 @@ export default function HomePage() {
         setCurrentAnalysis(null);
         setNotice(t('stock.quotaExceeded'));
       } else {
-        const { generateMockAnalysis } = await import('@/lib/mockData');
-        const analysis = generateMockAnalysis(stock.code);
-        setCurrentAnalysis(analysis);
+        setCurrentAnalysis(null);
+        setNotice(t('stock.analysisRequestFailed'));
       }
       setAnalysisCacheNotice(null);
     }

@@ -968,6 +968,19 @@ async def trigger_stock_analysis(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/public/analysis/stock/{stock_code}")
+async def trigger_stock_analysis_public(stock_code: str):
+    """Public analysis endpoint for guest mode without auth/history persistence."""
+    try:
+        analysis_result = await ai_engine.generate_stock_analysis(stock_code)
+        return {
+            "status": "success",
+            "data": analysis_result,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/analysis/history")
 def get_analysis_history(
     limit: int = 20,
