@@ -2,6 +2,7 @@ import json
 import logging
 from typing import Dict, Any
 from openai import AsyncOpenAI
+import httpx
 from app.core.config import settings
 from app.services.stock_data import StockDataService
 
@@ -63,9 +64,10 @@ STOCK_ANALYSIS_PROMPT = """
 
 class AIEngine:
     def __init__(self):
-        # Using OpenAI compatible client (can be swapped for Claude/DeepSeek etc)
-        self.client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else None
-        self.model = settings.OPENAI_MODEL
+        self.provider = settings.LLM_PROVIDER.strip().lower()
+        self.openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else None
+        self.openai_model = settings.OPENAI_MODEL
+        self.gemini_model = settings.GEMINI_MODEL
 
     async def generate_stock_analysis(self, stock_code: str) -> Dict[str, Any]:
         """Generate comprehensive stock analysis using LLM"""
@@ -89,32 +91,73 @@ class AIEngine:
             announcement_risk=data["announcement_risk"],
         )
 
-        if not self.client:
-            if settings.ANALYSIS_REQUIRE_LLM:
-                raise RuntimeError("LLM analysis is required but OPENAI_API_KEY is missing")
-            logger.warning("No API key provided. Using rule-based analysis from realtime quote data.")
-            return self._generate_rule_based_response(data)
-
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a professional financial AI assistant. Always output valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                response_format={ "type": "json_object" },
-                temperature=0.2,
-            )
-            
-            result = json.loads(response.choices[0].message.content)
+            if self.provider == "gemini":
+                result = await self._call_gemini(prompt)
+                active_model = self.gemini_model
+            else:
+                result = await self._call_openai(prompt)
+                active_model = self.openai_model
             result["analysis_mode"] = "llm"
-            result["analysis_model"] = self.model
+            result["analysis_model"] = active_model
             return self._enrich_result(result, data)
         except Exception as e:
             logger.error(f"AI Engine Error: {str(e)}")
             if settings.ANALYSIS_REQUIRE_LLM:
                 raise RuntimeError(f"LLM analysis failed: {e}")
             return self._generate_rule_based_response(data)
+
+    async def _call_openai(self, prompt: str) -> Dict[str, Any]:
+        if not self.openai_client:
+            raise RuntimeError("OPENAI_API_KEY is missing")
+        response = await self.openai_client.chat.completions.create(
+            model=self.openai_model,
+            messages=[
+                {"role": "system", "content": "You are a professional financial AI assistant. Always output valid JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+        )
+        content = response.choices[0].message.content
+        if not content:
+            raise RuntimeError("empty OpenAI response content")
+        return json.loads(content)
+
+    async def _call_gemini(self, prompt: str) -> Dict[str, Any]:
+        if not settings.GEMINI_API_KEY:
+            raise RuntimeError("GEMINI_API_KEY is missing")
+        endpoint = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/"
+            f"{self.gemini_model}:generateContent?key={settings.GEMINI_API_KEY}"
+        )
+        payload = {
+            "system_instruction": {
+                "parts": [{"text": "You are a professional financial AI assistant. Always output valid JSON."}]
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": prompt}],
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "responseMimeType": "application/json",
+            },
+        }
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(endpoint, json=payload)
+            response.raise_for_status()
+            data = response.json()
+        candidates = data.get("candidates") or []
+        if not candidates:
+            raise RuntimeError(f"empty Gemini candidates: {data}")
+        parts = candidates[0].get("content", {}).get("parts") or []
+        text = "".join(str(p.get("text", "")) for p in parts).strip()
+        if not text:
+            raise RuntimeError(f"empty Gemini text: {data}")
+        return json.loads(text)
 
     def _enrich_result(self, result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         """补齐模型输出缺失字段，保证前后端结构稳定。"""

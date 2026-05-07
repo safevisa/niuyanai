@@ -11,8 +11,11 @@ class Settings(BaseSettings):
     
     # AI Engine
     CLAUDE_API_KEY: str = ""
+    LLM_PROVIDER: str = "openai"  # openai | gemini
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4.1-mini"
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.0-flash"
     ANALYSIS_REQUIRE_LLM: bool = True
 
     # Auth
