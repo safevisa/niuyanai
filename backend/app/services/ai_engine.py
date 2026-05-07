@@ -68,6 +68,7 @@ class AIEngine:
         self.openai_client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY) if settings.OPENAI_API_KEY else None
         self.openai_model = settings.OPENAI_MODEL
         self.gemini_model = settings.GEMINI_MODEL
+        self.ark_model = settings.ARK_MODEL
 
     async def generate_stock_analysis(self, stock_code: str) -> Dict[str, Any]:
         """Generate comprehensive stock analysis using LLM"""
@@ -95,6 +96,9 @@ class AIEngine:
             if self.provider == "gemini":
                 result = await self._call_gemini(prompt)
                 active_model = self.gemini_model
+            elif self.provider == "doubao":
+                result = await self._call_doubao(prompt)
+                active_model = self.ark_model
             else:
                 result = await self._call_openai(prompt)
                 active_model = self.openai_model
@@ -158,6 +162,55 @@ class AIEngine:
         if not text:
             raise RuntimeError(f"empty Gemini text: {data}")
         return json.loads(text)
+
+    async def _call_doubao(self, prompt: str) -> Dict[str, Any]:
+        if not settings.ARK_API_KEY:
+            raise RuntimeError("ARK_API_KEY is missing")
+
+        endpoint = f"{settings.ARK_BASE_URL.rstrip('/')}/responses"
+        payload = {
+            "model": self.ark_model,
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": prompt}
+                    ],
+                }
+            ],
+            "temperature": 0.2,
+        }
+        headers = {
+            "Authorization": f"Bearer {settings.ARK_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            response = await client.post(endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+
+        text = self._extract_response_text(data)
+        if not text:
+            raise RuntimeError(f"empty Doubao text: {data}")
+        return json.loads(text)
+
+    def _extract_response_text(self, payload: Dict[str, Any]) -> str:
+        """兼容 responses 风格返回，尽量提取模型文本输出。"""
+        collected: list[str] = []
+
+        def walk(node: Any) -> None:
+            if isinstance(node, dict):
+                for key, value in node.items():
+                    if key in {"text", "output_text"} and isinstance(value, str):
+                        collected.append(value)
+                    else:
+                        walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(payload)
+        return "\n".join([part.strip() for part in collected if part and part.strip()]).strip()
 
     def _enrich_result(self, result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
         """补齐模型输出缺失字段，保证前后端结构稳定。"""

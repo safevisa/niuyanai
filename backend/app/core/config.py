@@ -11,11 +11,14 @@ class Settings(BaseSettings):
     
     # AI Engine
     CLAUDE_API_KEY: str = ""
-    LLM_PROVIDER: str = "openai"  # openai | gemini
+    LLM_PROVIDER: str = "openai"  # openai | gemini | doubao
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4.1-mini"
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.0-flash"
+    ARK_API_KEY: str = ""
+    ARK_MODEL: str = "doubao-seed-2-0-lite-260428"
+    ARK_BASE_URL: str = "https://ark.cn-beijing.volces.com/api/v3"
     ANALYSIS_REQUIRE_LLM: bool = True
 
     # Auth
