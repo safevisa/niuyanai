@@ -367,6 +367,25 @@ def _get_task_or_404(task_id: str) -> Dict[str, Any]:
     return task
 
 
+def _finalize_stale_task(task: Dict[str, Any]) -> None:
+    if task.get("status") != "running":
+        return
+    updated_at = task.get("updated_at")
+    if not isinstance(updated_at, str) or not updated_at:
+        return
+    try:
+        last_update = datetime.fromisoformat(updated_at)
+    except Exception:
+        return
+    elapsed = (datetime.now(timezone.utc) - last_update).total_seconds()
+    stale_limit = ANALYSIS_TIMEOUT_SECONDS + 20
+    if elapsed > stale_limit:
+        task["status"] = "failed"
+        task["progress"] = 100
+        task["error"] = f"analysis task stale timeout: exceeded {stale_limit}s without completion"
+        task["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
 async def _run_public_analysis_task(task_id: str, stock_code: str, guest_key: str) -> None:
     try:
         _set_task_state(task_id, status="running", progress=10, message="检查游客配额")
@@ -1155,6 +1174,7 @@ def get_user_analysis_task(task_id: str, current_user: User = Depends(get_curren
     task = _get_task_or_404(task_id)
     if task.get("owner_type") != "user" or task.get("owner_key") != str(current_user.id):
         raise HTTPException(status_code=403, detail="Forbidden task access")
+    _finalize_stale_task(task)
     return {
         "status": "success",
         "data": {
@@ -1189,6 +1209,7 @@ def get_public_analysis_task(task_id: str, request: Request):
     guest_key = _resolve_guest_key(request)
     if task.get("owner_type") != "guest" or task.get("owner_key") != guest_key:
         raise HTTPException(status_code=403, detail="Forbidden task access")
+    _finalize_stale_task(task)
     return {
         "status": "success",
         "data": {

@@ -450,7 +450,7 @@ export async function requestStockAnalysis(stock: SearchResult, token?: string):
     }
 
     // Doubao 实测高峰可能接近 60s，给足轮询窗口避免“任务仍在跑但前端先超时”。
-    const maxPoll = 100;
+    const maxPoll = 200;
     for (let i = 0; i < maxPoll; i += 1) {
       const statusResp = await fetch(`${API_BASE_URL}${statusEndpointBase}${encodeURIComponent(taskId)}`, {
         method: 'GET',
