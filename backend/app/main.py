@@ -379,8 +379,11 @@ def me(current_user: User = Depends(get_current_user), db: Session = Depends(get
 
 @app.get("/api/stock/{stock_code}")
 def get_stock_data(stock_code: str):
-    """Get mocked base data for a stock"""
-    return StockDataService.get_stock_basic(stock_code)
+    """Get realtime base data for a stock."""
+    try:
+        return StockDataService.get_stock_basic(stock_code)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"realtime quote unavailable: {exc}")
 
 
 @app.get("/api/stock/provider/status")

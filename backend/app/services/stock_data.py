@@ -264,11 +264,8 @@ class StockDataService:
         """Fetch basic stock info (price, PE, PB) with provider routing."""
         provider = settings.STOCK_DATA_PROVIDER.strip().lower()
         if provider == "real":
-            try:
-                return cls._get_stock_basic_real(stock_code)
-            except Exception:
-                # 真实源异常时兜底，保证服务可用
-                return cls._get_stock_basic_mock(stock_code)
+            # 严格真实模式：行情不可用时直接报错，禁止回退到 mock 误导用户
+            return cls._get_stock_basic_real(stock_code)
         return cls._get_stock_basic_mock(stock_code)
 
     @classmethod
@@ -349,7 +346,7 @@ class StockDataService:
     @staticmethod
     def get_provider_status() -> Dict[str, Any]:
         provider = settings.STOCK_DATA_PROVIDER.strip().lower()
-        fallback_active = provider == "real" and not bool(settings.TUSHARE_TOKEN)
+        fallback_active = provider == "real" and bool(StockDataService._last_real_provider_error or StockDataService._last_real_search_error)
         return {
             "provider": provider,
             "realtime_source": settings.REALTIME_DATA_SOURCE.strip().lower(),
@@ -456,7 +453,21 @@ class StockDataService:
             code = item.get("code", "")
             if not code:
                 continue
-            basic = cls.get_stock_basic(code)
+            quote_error = ""
+            try:
+                basic = cls.get_stock_basic(code)
+            except Exception as exc:
+                quote_error = str(exc)
+                basic = {
+                    "stock_name": item.get("name", f"股票{code}"),
+                    "market": item.get("market", "SH"),
+                    "industry": item.get("industry", "未知"),
+                    "current_price": 0.0,
+                    "pct_change": 0.0,
+                    "pe": 0.0,
+                    "pb": 0.0,
+                    "data_as_of": None,
+                }
             rows.append({
                 "code": code,
                 "name": basic.get("stock_name", item.get("name", f"股票{code}")),
@@ -467,6 +478,7 @@ class StockDataService:
                 "pe": round(cls._safe_float(basic.get("pe"), 0.0), 2),
                 "pb": round(cls._safe_float(basic.get("pb"), 0.0), 2),
                 "as_of": basic.get("data_as_of"),
+                "quote_error": quote_error or None,
             })
         return rows
 
