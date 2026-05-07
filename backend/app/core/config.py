@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     CLAUDE_API_KEY: str = ""
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4.1-mini"
+    ANALYSIS_REQUIRE_LLM: bool = True
 
     # Auth
     JWT_SECRET_KEY: str = "change-this-in-production"
@@ -27,6 +28,15 @@ class Settings(BaseSettings):
     LOGIN_CODE_MODE: str = "mock"  # mock | strict
     SMS_CODE_WEBHOOK_URL: str = ""
     EMAIL_CODE_WEBHOOK_URL: str = ""
+    SMS_PROVIDER: str = "aliyun"  # aliyun | webhook | mock
+    SMS_ALIYUN_ACCESS_KEY_ID: str = ""
+    SMS_ALIYUN_ACCESS_KEY_SECRET: str = ""
+    SMS_ALIYUN_SIGN_NAME: str = ""
+    SMS_ALIYUN_TEMPLATE_CODE: str = ""
+    EMAIL_PROVIDER: str = "gmail"  # gmail | webhook | mock
+    EMAIL_GMAIL_USER: str = ""
+    EMAIL_GMAIL_APP_PASSWORD: str = ""
+    EMAIL_FROM_NAME: str = "BullEye AI"
     STARTUP_WARMUP_ENABLED: bool = True
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

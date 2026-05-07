@@ -19,6 +19,7 @@ from jose import jwt, JWTError
 import hmac
 import hashlib
 import httpx
+from app.services.auth_delivery import deliver_login_code
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -335,23 +336,12 @@ def send_login_code(payload: Dict[str, Any]):
     LOGIN_CODE_STORE[account] = {"code": code, "expire_at": expire_at}
     LOGIN_CODE_SEND_STORE[account] = now_utc
 
-    webhook_url = settings.EMAIL_CODE_WEBHOOK_URL if is_email else settings.SMS_CODE_WEBHOOK_URL
-    delivered_via = "mock"
-    if webhook_url:
-        try:
-            with httpx.Client(timeout=4.0) as client:
-                client.post(
-                    webhook_url,
-                    json={
-                        "account": account,
-                        "channel": "email" if is_email else "sms",
-                        "code": code,
-                        "expire_in_seconds": LOGIN_CODE_TTL_SECONDS,
-                    },
-                ).raise_for_status()
-            delivered_via = "webhook"
-        except Exception:
-            delivered_via = "mock"
+    delivered_via = deliver_login_code(
+        account=account,
+        is_email=is_email,
+        code=code,
+        expire_in_seconds=LOGIN_CODE_TTL_SECONDS,
+    )
 
     return {
         "status": "success",
@@ -968,7 +958,7 @@ async def trigger_stock_analysis(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.post("/api/public/analysis/stock/{stock_code}")
@@ -981,7 +971,7 @@ async def trigger_stock_analysis_public(stock_code: str):
             "data": analysis_result,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @app.get("/api/analysis/history")

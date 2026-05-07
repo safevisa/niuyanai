@@ -90,6 +90,8 @@ class AIEngine:
         )
 
         if not self.client:
+            if settings.ANALYSIS_REQUIRE_LLM:
+                raise RuntimeError("LLM analysis is required but OPENAI_API_KEY is missing")
             logger.warning("No API key provided. Using rule-based analysis from realtime quote data.")
             return self._generate_rule_based_response(data)
 
@@ -105,9 +107,13 @@ class AIEngine:
             )
             
             result = json.loads(response.choices[0].message.content)
+            result["analysis_mode"] = "llm"
+            result["analysis_model"] = self.model
             return self._enrich_result(result, data)
         except Exception as e:
             logger.error(f"AI Engine Error: {str(e)}")
+            if settings.ANALYSIS_REQUIRE_LLM:
+                raise RuntimeError(f"LLM analysis failed: {e}")
             return self._generate_rule_based_response(data)
 
     def _enrich_result(self, result: Dict[str, Any], data: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,7 +161,9 @@ class AIEngine:
           "key_resistance": round(data["current_price"] * 1.1, 2),
           "risk_factors": [data["announcement_risk"] if data["announcement_risk"] != "无" else "大盘系统性风险"],
           "personal_take": "如果是我来看这支股票，当前位置具备一定的盈亏比优势，但需严格控制仓位。",
-          "disclaimer": "以上分析为AI基于历史数据的参考性解读，不构成投资建议，市场有风险，请独立判断。"
+          "disclaimer": "以上分析为AI基于历史数据的参考性解读，不构成投资建议，市场有风险，请独立判断。",
+          "analysis_mode": "rule_based",
+          "analysis_model": "rule_engine_v1",
         }, data)
 
 ai_engine = AIEngine()
