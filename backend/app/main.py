@@ -1,5 +1,5 @@
 from datetime import datetime, timedelta, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -68,6 +68,7 @@ LOGIN_CODE_SEND_STORE: Dict[str, datetime] = {}
 LOGIN_FAIL_STORE: Dict[str, Dict[str, Any]] = {}
 GUEST_DAILY_USAGE_STORE: Dict[str, Dict[str, Any]] = {}
 GUEST_ANALYSIS_HISTORY_STORE: Dict[str, Dict[str, Dict[str, Any]]] = {}
+ANALYSIS_TASK_STORE: Dict[str, Dict[str, Any]] = {}
 
 # CORS configuration
 app.add_middleware(
@@ -247,8 +248,7 @@ def _resolve_guest_key(request: Request) -> str:
     return "unknown_guest"
 
 
-def consume_guest_daily_quota(request: Request) -> Dict[str, int]:
-    guest_key = _resolve_guest_key(request)
+def consume_guest_daily_quota_by_key(guest_key: str) -> Dict[str, int]:
     today = datetime.now(timezone.utc).date().isoformat()
     state = GUEST_DAILY_USAGE_STORE.get(guest_key)
     if not state or state.get("date") != today:
@@ -270,8 +270,11 @@ def consume_guest_daily_quota(request: Request) -> Dict[str, int]:
     }
 
 
-def get_guest_quota_state(request: Request) -> Dict[str, int]:
-    guest_key = _resolve_guest_key(request)
+def consume_guest_daily_quota(request: Request) -> Dict[str, int]:
+    return consume_guest_daily_quota_by_key(_resolve_guest_key(request))
+
+
+def get_guest_quota_state_by_key(guest_key: str) -> Dict[str, int]:
     today = datetime.now(timezone.utc).date().isoformat()
     state = GUEST_DAILY_USAGE_STORE.get(guest_key)
     if not state or state.get("date") != today:
@@ -288,8 +291,11 @@ def get_guest_quota_state(request: Request) -> Dict[str, int]:
     }
 
 
-def get_guest_cached_analysis(request: Request, stock_code: str) -> Optional[Dict[str, Any]]:
-    guest_key = _resolve_guest_key(request)
+def get_guest_quota_state(request: Request) -> Dict[str, int]:
+    return get_guest_quota_state_by_key(_resolve_guest_key(request))
+
+
+def get_guest_cached_analysis_by_key(guest_key: str, stock_code: str) -> Optional[Dict[str, Any]]:
     today = datetime.now(timezone.utc).date().isoformat()
     user_cache = GUEST_ANALYSIS_HISTORY_STORE.get(guest_key, {})
     day_cache = user_cache.get(today, {})
@@ -297,13 +303,20 @@ def get_guest_cached_analysis(request: Request, stock_code: str) -> Optional[Dic
     return cached if isinstance(cached, dict) else None
 
 
-def save_guest_cached_analysis(request: Request, stock_code: str, analysis_result: Dict[str, Any]) -> None:
-    guest_key = _resolve_guest_key(request)
+def get_guest_cached_analysis(request: Request, stock_code: str) -> Optional[Dict[str, Any]]:
+    return get_guest_cached_analysis_by_key(_resolve_guest_key(request), stock_code)
+
+
+def save_guest_cached_analysis_by_key(guest_key: str, stock_code: str, analysis_result: Dict[str, Any]) -> None:
     today = datetime.now(timezone.utc).date().isoformat()
     user_cache = GUEST_ANALYSIS_HISTORY_STORE.setdefault(guest_key, {})
     # 仅保留当天历史，次日自动切换新 key，旧日不再命中
     user_cache[today] = user_cache.get(today, {})
     user_cache[today][stock_code] = analysis_result
+
+
+def save_guest_cached_analysis(request: Request, stock_code: str, analysis_result: Dict[str, Any]) -> None:
+    save_guest_cached_analysis_by_key(_resolve_guest_key(request), stock_code, analysis_result)
 
 
 def get_today_analysis_record(db: Session, user_id: UUID, stock_code: str) -> Optional[Analysis]:
@@ -318,6 +331,214 @@ def get_today_analysis_record(db: Session, user_id: UUID, stock_code: str) -> Op
         .order_by(Analysis.analysis_date.desc())
         .first()
     )
+
+
+def _set_task_state(task_id: str, **updates: Any) -> None:
+    task = ANALYSIS_TASK_STORE.get(task_id)
+    if not task:
+        return
+    task.update(updates)
+    task["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+
+def _create_task(owner_type: str, owner_key: str, stock_code: str) -> str:
+    task_id = str(uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+    ANALYSIS_TASK_STORE[task_id] = {
+        "task_id": task_id,
+        "status": "pending",
+        "progress": 0,
+        "message": "任务已创建",
+        "owner_type": owner_type,
+        "owner_key": owner_key,
+        "stock_code": stock_code,
+        "result": None,
+        "error": None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    }
+    return task_id
+
+
+def _get_task_or_404(task_id: str) -> Dict[str, Any]:
+    task = ANALYSIS_TASK_STORE.get(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return task
+
+
+async def _run_public_analysis_task(task_id: str, stock_code: str, guest_key: str) -> None:
+    try:
+        _set_task_state(task_id, status="running", progress=10, message="检查游客配额")
+        quota_before = get_guest_quota_state_by_key(guest_key)
+        cached = get_guest_cached_analysis_by_key(guest_key, stock_code)
+        if cached:
+            _set_task_state(
+                task_id,
+                status="success",
+                progress=100,
+                message="命中当天缓存",
+                result={
+                    "status": "success",
+                    "data": cached,
+                    "quota": {**quota_before, "from_cache": True},
+                },
+            )
+            return
+        if quota_before["daily_used"] >= FREE_DAILY_ANALYSIS_QUOTA:
+            _set_task_state(
+                task_id,
+                status="failed",
+                progress=100,
+                error=f"游客今日体验次数已达上限（{FREE_DAILY_ANALYSIS_QUOTA}次）",
+            )
+            return
+
+        _set_task_state(task_id, progress=45, message="调用模型分析")
+        analysis_result = await asyncio.wait_for(
+            ai_engine.generate_stock_analysis(stock_code),
+            timeout=ANALYSIS_TIMEOUT_SECONDS,
+        )
+        _set_task_state(task_id, progress=85, message="保存当天缓存")
+        save_guest_cached_analysis_by_key(guest_key, stock_code, analysis_result)
+        quota = consume_guest_daily_quota_by_key(guest_key)
+        _set_task_state(
+            task_id,
+            status="success",
+            progress=100,
+            message="分析完成",
+            result={
+                "status": "success",
+                "data": analysis_result,
+                "quota": {**quota, "from_cache": False},
+            },
+        )
+    except TimeoutError:
+        _set_task_state(
+            task_id,
+            status="failed",
+            progress=100,
+            error=f"analysis timeout: exceeded {ANALYSIS_TIMEOUT_SECONDS}s",
+        )
+    except Exception as exc:
+        _set_task_state(task_id, status="failed", progress=100, error=str(exc))
+
+
+async def _run_user_analysis_task(task_id: str, stock_code: str, user_id: str) -> None:
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == UUID(user_id)).first()
+        if not user:
+            _set_task_state(task_id, status="failed", progress=100, error="User not found")
+            return
+
+        _set_task_state(task_id, status="running", progress=10, message="检查用户配额")
+        daily_used = normalize_user_daily_usage(db, user)
+        today_record = get_today_analysis_record(db, user.id, stock_code)
+        if today_record and isinstance(today_record.ai_analysis, dict):
+            _set_task_state(
+                task_id,
+                status="success",
+                progress=100,
+                message="命中当天缓存",
+                result={
+                    "status": "success",
+                    "data": today_record.ai_analysis,
+                    "quota": {
+                        "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
+                        "daily_used": daily_used,
+                        "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - daily_used),
+                        "from_cache": True,
+                    },
+                },
+            )
+            return
+        if daily_used >= FREE_DAILY_ANALYSIS_QUOTA:
+            _set_task_state(
+                task_id,
+                status="failed",
+                progress=100,
+                error=f"今日分析次数已达上限（{FREE_DAILY_ANALYSIS_QUOTA}次）",
+            )
+            return
+
+        _set_task_state(task_id, progress=45, message="调用模型分析")
+        analysis_result = await asyncio.wait_for(
+            ai_engine.generate_stock_analysis(stock_code),
+            timeout=ANALYSIS_TIMEOUT_SECONDS,
+        )
+
+        _set_task_state(task_id, progress=80, message="写入分析历史")
+        scores = analysis_result.get("scores", {})
+        target_stock_code = analysis_result.get("stock_code", stock_code)
+        target_stock_name = analysis_result.get("stock_name", f"Stock_{stock_code}")
+        now_utc = datetime.now(timezone.utc)
+        analysis_record = (
+            db.query(Analysis)
+            .filter(Analysis.user_id == user.id, Analysis.stock_code == target_stock_code)
+            .order_by(Analysis.created_at.desc())
+            .first()
+        )
+        if analysis_record:
+            analysis_record.stock_name = target_stock_name
+            analysis_record.analysis_date = now_utc
+            analysis_record.bull_eye_score = analysis_result.get("bull_eye_score", 0)
+            analysis_record.trend_score = scores.get("trend", 0)
+            analysis_record.capital_score = scores.get("capital", 0)
+            analysis_record.chip_score = scores.get("chip", 0)
+            analysis_record.sentiment_score = scores.get("sentiment", 0)
+            analysis_record.fundamental_score = scores.get("fundamental", 0)
+            analysis_record.ai_analysis = analysis_result
+            analysis_record.market_price = analysis_result.get("market_price", 0)
+        else:
+            db.add(
+                Analysis(
+                    user_id=user.id,
+                    stock_code=target_stock_code,
+                    stock_name=target_stock_name,
+                    analysis_date=now_utc,
+                    bull_eye_score=analysis_result.get("bull_eye_score", 0),
+                    trend_score=scores.get("trend", 0),
+                    capital_score=scores.get("capital", 0),
+                    chip_score=scores.get("chip", 0),
+                    sentiment_score=scores.get("sentiment", 0),
+                    fundamental_score=scores.get("fundamental", 0),
+                    ai_analysis=analysis_result,
+                    market_price=analysis_result.get("market_price", 0),
+                )
+            )
+        user.daily_quota = FREE_DAILY_ANALYSIS_QUOTA
+        user.daily_used = daily_used + 1
+        db.add(user)
+        db.commit()
+        latest_daily_used = user.daily_used
+        _set_task_state(
+            task_id,
+            status="success",
+            progress=100,
+            message="分析完成",
+            result={
+                "status": "success",
+                "data": analysis_result,
+                "quota": {
+                    "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
+                    "daily_used": latest_daily_used,
+                    "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - latest_daily_used),
+                    "from_cache": False,
+                },
+            },
+        )
+    except TimeoutError:
+        _set_task_state(
+            task_id,
+            status="failed",
+            progress=100,
+            error=f"analysis timeout: exceeded {ANALYSIS_TIMEOUT_SECONDS}s",
+        )
+    except Exception as exc:
+        _set_task_state(task_id, status="failed", progress=100, error=str(exc))
+    finally:
+        db.close()
 
 
 def get_current_user(
@@ -964,6 +1185,75 @@ async def wechat_pay_callback(
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return {"status": "success", "data": _mark_order_paid(db, order, user)}
+
+@app.post("/api/analysis/stock/{stock_code}/tasks")
+async def create_user_analysis_task(
+    stock_code: str,
+    current_user: User = Depends(get_current_user),
+):
+    task_id = _create_task("user", str(current_user.id), stock_code)
+    asyncio.create_task(_run_user_analysis_task(task_id, stock_code, str(current_user.id)))
+    return {
+        "status": "success",
+        "data": {
+            "task_id": task_id,
+            "status": "pending",
+        },
+    }
+
+
+@app.get("/api/analysis/tasks/{task_id}")
+def get_user_analysis_task(task_id: str, current_user: User = Depends(get_current_user)):
+    task = _get_task_or_404(task_id)
+    if task.get("owner_type") != "user" or task.get("owner_key") != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Forbidden task access")
+    return {
+        "status": "success",
+        "data": {
+            "task_id": task["task_id"],
+            "task_status": task["status"],
+            "progress": task["progress"],
+            "message": task.get("message", ""),
+            "result": task.get("result"),
+            "error": task.get("error"),
+            "updated_at": task.get("updated_at"),
+        },
+    }
+
+
+@app.post("/api/public/analysis/stock/{stock_code}/tasks")
+async def create_public_analysis_task(stock_code: str, request: Request):
+    guest_key = _resolve_guest_key(request)
+    task_id = _create_task("guest", guest_key, stock_code)
+    asyncio.create_task(_run_public_analysis_task(task_id, stock_code, guest_key))
+    return {
+        "status": "success",
+        "data": {
+            "task_id": task_id,
+            "status": "pending",
+        },
+    }
+
+
+@app.get("/api/public/analysis/tasks/{task_id}")
+def get_public_analysis_task(task_id: str, request: Request):
+    task = _get_task_or_404(task_id)
+    guest_key = _resolve_guest_key(request)
+    if task.get("owner_type") != "guest" or task.get("owner_key") != guest_key:
+        raise HTTPException(status_code=403, detail="Forbidden task access")
+    return {
+        "status": "success",
+        "data": {
+            "task_id": task["task_id"],
+            "task_status": task["status"],
+            "progress": task["progress"],
+            "message": task.get("message", ""),
+            "result": task.get("result"),
+            "error": task.get("error"),
+            "updated_at": task.get("updated_at"),
+        },
+    }
+
 
 @app.post("/api/analysis/stock/{stock_code}")
 async def trigger_stock_analysis(

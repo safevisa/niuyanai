@@ -12,6 +12,27 @@ type AnalysisApiResponse = {
   data?: Partial<StockAnalysis>;
 };
 
+type AnalysisTaskCreateResponse = {
+  status?: string;
+  data?: {
+    task_id?: string;
+    status?: string;
+  };
+};
+
+type AnalysisTaskStatusResponse = {
+  status?: string;
+  data?: {
+    task_id?: string;
+    task_status?: 'pending' | 'running' | 'success' | 'failed';
+    progress?: number;
+    message?: string;
+    result?: AnalysisApiResponse;
+    error?: string | null;
+    updated_at?: string;
+  };
+};
+
 type LoginResponse = {
   token: string;
   user: User;
@@ -338,6 +359,10 @@ function asNumber(value: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function normalizeAnalysis(stock: SearchResult, data: Partial<StockAnalysis>): StockAnalysis {
   const fallback = generateMockAnalysis(stock.code);
 
@@ -367,37 +392,63 @@ function normalizeAnalysis(stock: SearchResult, data: Partial<StockAnalysis>): S
 }
 
 export async function requestStockAnalysis(stock: SearchResult, token?: string): Promise<StockAnalysis> {
-  const endpoint = token
-    ? `/api/analysis/stock/${encodeURIComponent(stock.code)}`
-    : `/api/public/analysis/stock/${encodeURIComponent(stock.code)}`;
-  const response = await fetch(
-    `${API_BASE_URL}${endpoint}`,
-    {
-      method: 'POST',
-      headers: authHeaders(token),
-    }
-  );
+  const createEndpoint = token
+    ? `/api/analysis/stock/${encodeURIComponent(stock.code)}/tasks`
+    : `/api/public/analysis/stock/${encodeURIComponent(stock.code)}/tasks`;
+  const statusEndpointBase = token ? '/api/analysis/tasks/' : '/api/public/analysis/tasks/';
 
-  if (!response.ok) {
+  const createResp = await fetch(`${API_BASE_URL}${createEndpoint}`, {
+    method: 'POST',
+    headers: authHeaders(token),
+  });
+  if (!createResp.ok) {
     let detail = '';
     try {
-      const errPayload = (await response.json()) as { detail?: string };
+      const errPayload = (await createResp.json()) as { detail?: string };
       detail = errPayload.detail ?? '';
     } catch {
       detail = '';
     }
-    if (response.status === 429) {
+    if (createResp.status === 429) {
       throw new Error(`QUOTA_EXCEEDED:${detail || 'Daily quota exceeded'}`);
     }
-    throw new Error(`Analysis request failed: ${response.status}`);
+    throw new Error(`Analysis task create failed: ${createResp.status}`);
+  }
+  const createPayload = (await createResp.json()) as AnalysisTaskCreateResponse;
+  const taskId = createPayload.data?.task_id;
+  if (!taskId) {
+    throw new Error('Missing analysis task id');
   }
 
-  const payload = (await response.json()) as AnalysisApiResponse;
-  if (payload.status !== 'success' || !payload.data) {
-    throw new Error('Invalid analysis response payload');
+  const maxPoll = 45;
+  for (let i = 0; i < maxPoll; i += 1) {
+    const statusResp = await fetch(`${API_BASE_URL}${statusEndpointBase}${encodeURIComponent(taskId)}`, {
+      method: 'GET',
+      headers: authHeaders(token),
+    });
+    if (!statusResp.ok) {
+      throw new Error(`Analysis task status failed: ${statusResp.status}`);
+    }
+    const statusPayload = (await statusResp.json()) as AnalysisTaskStatusResponse;
+    const taskStatus = statusPayload.data?.task_status;
+    if (taskStatus === 'success') {
+      const resultPayload = statusPayload.data?.result;
+      if (resultPayload?.status !== 'success' || !resultPayload.data) {
+        throw new Error('Invalid analysis task result payload');
+      }
+      return normalizeAnalysis(stock, resultPayload.data);
+    }
+    if (taskStatus === 'failed') {
+      const detail = statusPayload.data?.error ?? 'Analysis task failed';
+      if (`${detail}`.includes('次数已达上限')) {
+        throw new Error(`QUOTA_EXCEEDED:${detail}`);
+      }
+      throw new Error(detail);
+    }
+    await sleep(1200);
   }
 
-  return normalizeAnalysis(stock, payload.data);
+  throw new Error('Analysis polling timeout');
 }
 
 export async function loginDemoUser(): Promise<LoginResponse> {
