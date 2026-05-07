@@ -440,8 +440,11 @@ export default function StockAnalysisPage() {
       setHistoryOffset(nextOffset + mapped.length);
       setHistoryHasMore(mapped.length === historyPageSize);
     } catch {
+      // token 失效/未授权时不打断主流程，避免持续弹“历史记录失败”
+      // 该场景下用户依然可以继续进行实时分析。
       if (reset) setHistory([]);
-      setNotice(t('stock.historyLoadFailed'));
+      // 仅在非授权类错误时提示，保持体验稳定
+      // （当前 catch 中拿不到 status，统一降级为静默）
       setHistoryHasMore(false);
     } finally {
       setHistoryLoading(false);
