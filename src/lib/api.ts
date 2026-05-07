@@ -1,7 +1,11 @@
 import type { SearchResult, StockAnalysis, User } from '@/types';
 import { generateMockAnalysis } from '@/lib/mockData';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? 'http://127.0.0.1:8000';
+const RAILWAY_PROD_API_BASE_URL = 'https://niuyanai-production.up.railway.app';
+
+const API_BASE_URL =
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  (process.env.NODE_ENV === 'production' ? RAILWAY_PROD_API_BASE_URL : 'http://127.0.0.1:8000');
 
 type AnalysisApiResponse = {
   status?: string;
