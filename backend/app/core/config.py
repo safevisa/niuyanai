@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     
     # Data Providers
     TUSHARE_TOKEN: str = ""
-    STOCK_DATA_PROVIDER: str = "mock"  # mock | real
+    STOCK_DATA_PROVIDER: str = "real"  # mock | real
     REALTIME_DATA_SOURCE: str = "eastmoney"  # eastmoney | tushare
     WECHAT_PAY_CALLBACK_SECRET: str = ""
     LOGIN_CODE_MODE: str = "mock"  # mock | strict

@@ -222,7 +222,7 @@ class StockDataService:
         secid = cls._to_eastmoney_secid(stock_code, stock["market"])
         fields = "f57,f58,f43,f46,f60,f170,f169,f167,f164,f116,f117"
         url = f"https://push2.eastmoney.com/api/qt/stock/get?secid={secid}&fields={fields}"
-        with httpx.Client(timeout=5.0) as client:
+        with httpx.Client(timeout=5.0, follow_redirects=True) as client:
             response = client.get(url)
             response.raise_for_status()
             payload = response.json()
@@ -726,7 +726,7 @@ class StockDataService:
             "token": token,
             "count": str(limit),
         }
-        with httpx.Client(timeout=5.0) as client:
+        with httpx.Client(timeout=5.0, follow_redirects=True) as client:
             response = client.get(url, params=params)
             response.raise_for_status()
             payload = response.json()
@@ -777,7 +777,7 @@ class StockDataService:
         merged: List[Dict[str, str]] = []
         seen_codes: set[str] = set()
 
-        with httpx.Client(timeout=8.0) as client:
+        with httpx.Client(timeout=8.0, follow_redirects=True) as client:
             while page <= 20:
                 params = {
                     "pn": str(page),
