@@ -420,7 +420,8 @@ export async function requestStockAnalysis(stock: SearchResult, token?: string):
     throw new Error('Missing analysis task id');
   }
 
-  const maxPoll = 45;
+  // Doubao 实测高峰可能接近 60s，给足轮询窗口避免“任务仍在跑但前端先超时”。
+  const maxPoll = 100;
   for (let i = 0; i < maxPoll; i += 1) {
     const statusResp = await fetch(`${API_BASE_URL}${statusEndpointBase}${encodeURIComponent(taskId)}`, {
       method: 'GET',
@@ -448,7 +449,7 @@ export async function requestStockAnalysis(stock: SearchResult, token?: string):
     await sleep(1200);
   }
 
-  throw new Error('Analysis polling timeout');
+  throw new Error('Analysis polling timeout: task still running');
 }
 
 export async function loginDemoUser(): Promise<LoginResponse> {
