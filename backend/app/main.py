@@ -9,6 +9,7 @@ from typing import List
 import random
 import re
 import threading
+import asyncio
 
 from app.core.config import settings
 from app.db.database import engine, Base, get_db, SessionLocal
@@ -57,6 +58,7 @@ def warmup_market_universe():
     threading.Thread(target=_warmup_job, daemon=True).start()
 
 FREE_DAILY_ANALYSIS_QUOTA = 3
+ANALYSIS_TIMEOUT_SECONDS = 15
 LOGIN_CODE_TTL_SECONDS = 300
 LOGIN_CODE_STORE: Dict[str, Dict[str, Any]] = {}
 LOGIN_CODE_SEND_COOLDOWN_SECONDS = 60
@@ -64,6 +66,7 @@ LOGIN_FAIL_MAX_ATTEMPTS = 5
 LOGIN_FAIL_LOCK_SECONDS = 600
 LOGIN_CODE_SEND_STORE: Dict[str, datetime] = {}
 LOGIN_FAIL_STORE: Dict[str, Dict[str, Any]] = {}
+GUEST_DAILY_USAGE_STORE: Dict[str, Dict[str, Any]] = {}
 
 # CORS configuration
 app.add_middleware(
@@ -232,6 +235,38 @@ def normalize_user_daily_usage(db: Session, user: User) -> int:
         db.commit()
         db.refresh(user)
     return user.daily_used
+
+
+def _resolve_guest_key(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for", "") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown_guest"
+
+
+def consume_guest_daily_quota(request: Request) -> Dict[str, int]:
+    guest_key = _resolve_guest_key(request)
+    today = datetime.now(timezone.utc).date().isoformat()
+    state = GUEST_DAILY_USAGE_STORE.get(guest_key)
+    if not state or state.get("date") != today:
+        state = {"date": today, "count": 0}
+
+    used = int(state.get("count", 0))
+    if used >= FREE_DAILY_ANALYSIS_QUOTA:
+        raise HTTPException(
+            status_code=429,
+            detail=f"游客今日体验次数已达上限（{FREE_DAILY_ANALYSIS_QUOTA}次）",
+        )
+
+    state["count"] = used + 1
+    GUEST_DAILY_USAGE_STORE[guest_key] = state
+    return {
+        "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
+        "daily_used": int(state["count"]),
+        "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - int(state["count"])),
+    }
 
 
 def get_current_user(
@@ -894,7 +929,16 @@ async def trigger_stock_analysis(
                 detail=f"今日分析次数已达上限（{FREE_DAILY_ANALYSIS_QUOTA}次）",
             )
 
-        analysis_result = await ai_engine.generate_stock_analysis(stock_code)
+        try:
+            analysis_result = await asyncio.wait_for(
+                ai_engine.generate_stock_analysis(stock_code),
+                timeout=ANALYSIS_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=f"analysis timeout: exceeded {ANALYSIS_TIMEOUT_SECONDS}s",
+            )
 
         scores = analysis_result.get("scores", {})
         target_stock_code = analysis_result.get("stock_code", stock_code)
@@ -962,14 +1006,27 @@ async def trigger_stock_analysis(
 
 
 @app.post("/api/public/analysis/stock/{stock_code}")
-async def trigger_stock_analysis_public(stock_code: str):
+async def trigger_stock_analysis_public(stock_code: str, request: Request):
     """Public analysis endpoint for guest mode without auth/history persistence."""
     try:
-        analysis_result = await ai_engine.generate_stock_analysis(stock_code)
+        quota = consume_guest_daily_quota(request)
+        try:
+            analysis_result = await asyncio.wait_for(
+                ai_engine.generate_stock_analysis(stock_code),
+                timeout=ANALYSIS_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail=f"analysis timeout: exceeded {ANALYSIS_TIMEOUT_SECONDS}s",
+            )
         return {
             "status": "success",
             "data": analysis_result,
+            "quota": quota,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=502, detail=str(e))
 
