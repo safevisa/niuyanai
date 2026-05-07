@@ -246,7 +246,68 @@ class AIEngine:
         result["data_as_of"] = result.get("data_as_of") or data.get("data_as_of")
         if "market_price" not in result:
             result["market_price"] = data.get("current_price", 0)
+        result["buy_signals"] = self._normalize_signals(
+            result.get("buy_signals"),
+            default_type_prefix="B",
+            default_description_prefix="参考买点",
+            market_price=float(data.get("current_price", 0) or 0),
+            default_low_ratio=0.97,
+            default_high_ratio=1.0,
+        )
+        result["sell_signals"] = self._normalize_signals(
+            result.get("sell_signals"),
+            default_type_prefix="S",
+            default_description_prefix="参考卖点",
+            market_price=float(data.get("current_price", 0) or 0),
+            default_low_ratio=1.0,
+            default_high_ratio=1.03,
+        )
         return result
+
+    def _normalize_signals(
+        self,
+        signals: Any,
+        default_type_prefix: str,
+        default_description_prefix: str,
+        market_price: float,
+        default_low_ratio: float,
+        default_high_ratio: float,
+    ) -> list[Dict[str, Any]]:
+        normalized: list[Dict[str, Any]] = []
+        if not isinstance(signals, list):
+            return normalized
+        for idx, item in enumerate(signals, start=1):
+            if isinstance(item, dict):
+                zone_low = float(item.get("zone_low") or 0)
+                zone_high = float(item.get("zone_high") or 0)
+                if zone_low <= 0 or zone_high <= 0:
+                    zone_low = round(max(0.01, market_price * default_low_ratio), 2)
+                    zone_high = round(max(zone_low, market_price * default_high_ratio), 2)
+                normalized.append(
+                    {
+                        "type": str(item.get("type") or f"{default_type_prefix}{idx}"),
+                        "description": str(item.get("description") or f"{default_description_prefix}{idx}"),
+                        "zone_low": round(min(zone_low, zone_high), 2),
+                        "zone_high": round(max(zone_low, zone_high), 2),
+                        "strength": str(item.get("strength") or "中"),
+                        "conditions_met": int(item.get("conditions_met") or 2),
+                    }
+                )
+                continue
+            if isinstance(item, str) and item.strip():
+                zone_low = round(max(0.01, market_price * default_low_ratio), 2)
+                zone_high = round(max(zone_low, market_price * default_high_ratio), 2)
+                normalized.append(
+                    {
+                        "type": f"{default_type_prefix}{idx}",
+                        "description": item.strip(),
+                        "zone_low": zone_low,
+                        "zone_high": zone_high,
+                        "strength": "中",
+                        "conditions_met": 2,
+                    }
+                )
+        return normalized
 
     def _generate_rule_based_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Rule-based response derived from realtime data when LLM is unavailable."""
