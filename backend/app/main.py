@@ -67,6 +67,7 @@ LOGIN_FAIL_LOCK_SECONDS = 600
 LOGIN_CODE_SEND_STORE: Dict[str, datetime] = {}
 LOGIN_FAIL_STORE: Dict[str, Dict[str, Any]] = {}
 GUEST_DAILY_USAGE_STORE: Dict[str, Dict[str, Any]] = {}
+GUEST_ANALYSIS_HISTORY_STORE: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
 # CORS configuration
 app.add_middleware(
@@ -267,6 +268,56 @@ def consume_guest_daily_quota(request: Request) -> Dict[str, int]:
         "daily_used": int(state["count"]),
         "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - int(state["count"])),
     }
+
+
+def get_guest_quota_state(request: Request) -> Dict[str, int]:
+    guest_key = _resolve_guest_key(request)
+    today = datetime.now(timezone.utc).date().isoformat()
+    state = GUEST_DAILY_USAGE_STORE.get(guest_key)
+    if not state or state.get("date") != today:
+        return {
+            "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
+            "daily_used": 0,
+            "daily_remaining": FREE_DAILY_ANALYSIS_QUOTA,
+        }
+    used = int(state.get("count", 0))
+    return {
+        "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
+        "daily_used": used,
+        "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - used),
+    }
+
+
+def get_guest_cached_analysis(request: Request, stock_code: str) -> Optional[Dict[str, Any]]:
+    guest_key = _resolve_guest_key(request)
+    today = datetime.now(timezone.utc).date().isoformat()
+    user_cache = GUEST_ANALYSIS_HISTORY_STORE.get(guest_key, {})
+    day_cache = user_cache.get(today, {})
+    cached = day_cache.get(stock_code)
+    return cached if isinstance(cached, dict) else None
+
+
+def save_guest_cached_analysis(request: Request, stock_code: str, analysis_result: Dict[str, Any]) -> None:
+    guest_key = _resolve_guest_key(request)
+    today = datetime.now(timezone.utc).date().isoformat()
+    user_cache = GUEST_ANALYSIS_HISTORY_STORE.setdefault(guest_key, {})
+    # 仅保留当天历史，次日自动切换新 key，旧日不再命中
+    user_cache[today] = user_cache.get(today, {})
+    user_cache[today][stock_code] = analysis_result
+
+
+def get_today_analysis_record(db: Session, user_id: UUID, stock_code: str) -> Optional[Analysis]:
+    start_of_day = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    return (
+        db.query(Analysis)
+        .filter(
+            Analysis.user_id == user_id,
+            Analysis.stock_code == stock_code,
+            Analysis.analysis_date >= start_of_day,
+        )
+        .order_by(Analysis.analysis_date.desc())
+        .first()
+    )
 
 
 def get_current_user(
@@ -923,6 +974,19 @@ async def trigger_stock_analysis(
     """Trigger AI analysis for a given stock"""
     try:
         daily_used = normalize_user_daily_usage(db, current_user)
+        today_record = get_today_analysis_record(db, current_user.id, stock_code)
+        if today_record and isinstance(today_record.ai_analysis, dict):
+            return {
+                "status": "success",
+                "data": today_record.ai_analysis,
+                "quota": {
+                    "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
+                    "daily_used": daily_used,
+                    "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - daily_used),
+                    "from_cache": True,
+                },
+            }
+
         if daily_used >= FREE_DAILY_ANALYSIS_QUOTA:
             raise HTTPException(
                 status_code=429,
@@ -945,7 +1009,7 @@ async def trigger_stock_analysis(
         target_stock_name = analysis_result.get("stock_name", f"Stock_{stock_code}")
         now_utc = datetime.now(timezone.utc)
 
-        # 历史去重策略：同一用户同一股票只保留一条最新记录，重复分析覆盖更新。
+        # 历史去重策略：同一用户同一股票保留一条最新记录，重复分析覆盖更新。
         analysis_record = (
             db.query(Analysis)
             .filter(
@@ -997,6 +1061,7 @@ async def trigger_stock_analysis(
                 "daily_quota": FREE_DAILY_ANALYSIS_QUOTA,
                 "daily_used": latest_daily_used,
                 "daily_remaining": max(0, FREE_DAILY_ANALYSIS_QUOTA - latest_daily_used),
+                "from_cache": False,
             },
         }
     except HTTPException:
@@ -1009,7 +1074,22 @@ async def trigger_stock_analysis(
 async def trigger_stock_analysis_public(stock_code: str, request: Request):
     """Public analysis endpoint for guest mode without auth/history persistence."""
     try:
-        quota = consume_guest_daily_quota(request)
+        quota_before = get_guest_quota_state(request)
+        cached = get_guest_cached_analysis(request, stock_code)
+        if cached:
+            return {
+                "status": "success",
+                "data": cached,
+                "quota": {
+                    **quota_before,
+                    "from_cache": True,
+                },
+            }
+        if quota_before["daily_used"] >= FREE_DAILY_ANALYSIS_QUOTA:
+            raise HTTPException(
+                status_code=429,
+                detail=f"游客今日体验次数已达上限（{FREE_DAILY_ANALYSIS_QUOTA}次）",
+            )
         try:
             analysis_result = await asyncio.wait_for(
                 ai_engine.generate_stock_analysis(stock_code),
@@ -1020,10 +1100,15 @@ async def trigger_stock_analysis_public(stock_code: str, request: Request):
                 status_code=504,
                 detail=f"analysis timeout: exceeded {ANALYSIS_TIMEOUT_SECONDS}s",
             )
+        save_guest_cached_analysis(request, stock_code, analysis_result)
+        quota = consume_guest_daily_quota(request)
         return {
             "status": "success",
             "data": analysis_result,
-            "quota": quota,
+            "quota": {
+                **quota,
+                "from_cache": False,
+            },
         }
     except HTTPException:
         raise
