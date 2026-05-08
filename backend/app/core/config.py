@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     EMAIL_GMAIL_APP_PASSWORD: str = ""
     EMAIL_FROM_NAME: str = "BullEye AI"
     STARTUP_WARMUP_ENABLED: bool = True
+    REDIS_URL: str = ""
     
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

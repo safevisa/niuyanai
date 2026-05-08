@@ -15,15 +15,73 @@ from app.core.config import settings
 from app.db.database import engine, Base, get_db, SessionLocal
 from app.services.ai_engine import ai_engine
 from app.services.stock_data import StockDataService
-from app.models.domain import User, Analysis, PriceAlert, InviteCode, InviteRelation, Subscription, PaymentOrder
+from app.services.radar_service import RadarService
+from app.models.domain import User, Analysis, PriceAlert, InviteCode, InviteRelation, Subscription, PaymentOrder, ShareReferral
 from jose import jwt, JWTError
 import hmac
 import hashlib
 import httpx
+from sqlalchemy import inspect, text
 from app.services.auth_delivery import deliver_login_code
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
+
+
+def _run_compat_migrations() -> None:
+    """
+    Lightweight runtime migration for mixed SQLite/Postgres deployments.
+    Keeps backward compatibility without forcing external migration tooling.
+    """
+    conn = engine.connect()
+    try:
+        inspector = inspect(engine)
+        tables = set(inspector.get_table_names())
+        cols = {c["name"] for c in inspector.get_columns("analyses")} if "analyses" in tables else set()
+
+        if "analyses" in tables:
+            if "is_radar_featured" not in cols:
+                conn.execute(text("ALTER TABLE analyses ADD COLUMN is_radar_featured BOOLEAN DEFAULT FALSE"))
+            if "radar_category" not in cols:
+                conn.execute(text("ALTER TABLE analyses ADD COLUMN radar_category VARCHAR(20)"))
+            if "radar_reason" not in cols:
+                conn.execute(text("ALTER TABLE analyses ADD COLUMN radar_reason TEXT"))
+
+        if "share_referrals" not in tables:
+            if engine.dialect.name == "sqlite":
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE share_referrals (
+                            id TEXT PRIMARY KEY,
+                            inviter_id TEXT,
+                            invitee_phone VARCHAR(11),
+                            status VARCHAR(20) DEFAULT 'pending',
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                        """
+                    )
+                )
+            else:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE share_referrals (
+                            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                            inviter_id UUID REFERENCES users(id),
+                            invitee_phone VARCHAR(11),
+                            status VARCHAR(20) DEFAULT 'pending',
+                            created_at TIMESTAMP DEFAULT NOW()
+                        )
+                        """
+                    )
+                )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+_run_compat_migrations()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -132,6 +190,10 @@ class DailyReportRequest(BaseModel):
 
 class BindInviteRequest(BaseModel):
     code: str
+
+
+class CreateShareReferralRequest(BaseModel):
+    invitee_phone: str
 
 class CreatePaymentOrderRequest(BaseModel):
     plan: str  # vip / pro
@@ -712,6 +774,51 @@ def list_market_stocks(q: str = "", limit: int = 30, offset: int = 0, db: Sessio
     }
 
 
+@app.get("/api/market/radar")
+async def get_market_radar(
+    authorization: Optional[str] = Header(default=None),
+    db: Session = Depends(get_db),
+):
+    rows = await RadarService.calculate_daily_radar(db)
+
+    vip_level = 0
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.removeprefix("Bearer ").strip()
+        try:
+            payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+            user_id = payload.get("sub")
+            if user_id:
+                user = db.query(User).filter(User.id == UUID(user_id)).first()
+                if user:
+                    vip_level = int(user.vip_level or 0)
+        except Exception:
+            vip_level = 0
+
+    if vip_level <= 0:
+        masked: List[Dict[str, Any]] = []
+        for idx, row in enumerate(rows):
+            if idx < 2:
+                masked.append(row)
+                continue
+            item = dict(row)
+            item["stock_code"] = "需解锁"
+            item["stock_name"] = "需解锁"
+            item["buy_zone"] = None
+            item["is_locked"] = True
+            masked.append(item)
+        rows = masked
+
+    return {
+        "status": "success",
+        "data": {
+            "sentiment_score": 50 if not rows else int(sum(int(x.get("bull_eye_score", 50)) for x in rows[:5]) / max(1, min(5, len(rows)))),
+            "date": datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d"),
+            "items": rows,
+            "vip_level": vip_level,
+        },
+    }
+
+
 @app.get("/api/market/cache/status")
 def get_market_cache_status(db: Session = Depends(get_db)):
     try:
@@ -1013,8 +1120,68 @@ def bind_invite_code(
         raise HTTPException(status_code=400, detail="不能绑定自己的邀请码")
     relation = InviteRelation(inviter_id=inviter_code.user_id, invitee_id=current_user.id)
     db.add(relation)
+    # Auto-complete referral tracking when phone matches pending invitation.
+    if current_user.phone:
+        referrals = (
+            db.query(ShareReferral)
+            .filter(
+                ShareReferral.inviter_id == inviter_code.user_id,
+                ShareReferral.invitee_phone == current_user.phone,
+                ShareReferral.status == "pending",
+            )
+            .all()
+        )
+        for row in referrals:
+            row.status = "completed"
+            db.add(row)
     db.commit()
     return {"status": "success"}
+
+
+@app.post("/api/invite/share-referrals")
+def create_share_referral(
+    payload: CreateShareReferralRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    phone = re.sub(r"\D+", "", payload.invitee_phone or "").strip()
+    if len(phone) != 11:
+        raise HTTPException(status_code=400, detail="请输入有效的11位手机号")
+    row = ShareReferral(
+        inviter_id=current_user.id,
+        invitee_phone=phone,
+        status="pending",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return {"status": "success", "data": {"id": str(row.id), "status": row.status}}
+
+
+@app.get("/api/invite/share-referrals")
+def list_share_referrals(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rows = (
+        db.query(ShareReferral)
+        .filter(ShareReferral.inviter_id == current_user.id)
+        .order_by(ShareReferral.created_at.desc())
+        .limit(100)
+        .all()
+    )
+    return {
+        "status": "success",
+        "data": [
+            {
+                "id": str(row.id),
+                "invitee_phone": row.invitee_phone,
+                "status": row.status,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            }
+            for row in rows
+        ],
+    }
 
 @app.post("/api/payments/create")
 def create_payment_order(

@@ -129,6 +129,16 @@ class PaymentOrder(Base):
     created_at = Column(DateTime, server_default=func.now())
 
 
+class ShareReferral(Base):
+    __tablename__ = "share_referrals"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    inviter_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
+    invitee_phone = Column(String(11), index=True)
+    status = Column(String(20), default="pending")  # pending / completed
+    created_at = Column(DateTime, server_default=func.now())
+
+
 class StockMaster(Base):
     __tablename__ = "stock_master"
     __table_args__ = (

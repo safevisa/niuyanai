@@ -272,7 +272,12 @@ export default function MarketPage() {
   return (
     <div className="space-y-4 page-enter">
       <div>
-        <h1 className="text-lg font-bold text-dark-100">{t('market.title')}</h1>
+        <div className="flex items-center justify-between">
+          <h1 className="text-lg font-bold text-dark-100">{t('market.title')}</h1>
+          <a href="/market/radar" className="btn-ghost text-xs px-3 py-1.5">
+            {t('market.radarTitle')}
+          </a>
+        </div>
         <p className="text-xs text-dark-400 mt-0.5">
           {new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })} · {t('market.dateHint')}
         </p>

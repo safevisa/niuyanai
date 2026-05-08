@@ -122,6 +122,38 @@ export type MarketStocksPage = {
   total: number;
 };
 
+export type RadarItem = {
+  stock_code: string;
+  stock_name: string;
+  market: string;
+  industry: string;
+  price: number;
+  pct_change: number;
+  amount: number;
+  turnover_rate: number;
+  pe: number;
+  pb: number;
+  bull_eye_score: number;
+  radar_category: 'B1' | 'B2' | 'B3' | string;
+  radar_reason: string;
+  buy_zone: { low: number; high: number } | null;
+  analysis_for_beginner: string;
+  disclaimer: string;
+  is_locked?: boolean;
+};
+
+export type MarketRadarResponseData = {
+  sentiment_score: number;
+  date: string;
+  items: RadarItem[];
+  vip_level: number;
+};
+
+type MarketRadarResponse = {
+  status?: string;
+  data?: MarketRadarResponseData;
+};
+
 export type ScreenerRequest = {
   minScore: number;
   maxPE: number;
@@ -323,6 +355,18 @@ export type InviteProfile = {
 type InviteProfileResponse = {
   status?: string;
   data?: InviteProfile;
+};
+
+export type ShareReferralItem = {
+  id: string;
+  invitee_phone: string;
+  status: 'pending' | 'completed' | string;
+  created_at?: string | null;
+};
+
+type ShareReferralListResponse = {
+  status?: string;
+  data?: ShareReferralItem[];
 };
 
 export type PaymentOrder = {
@@ -666,6 +710,21 @@ export async function fetchMarketStocksPage(query = '', limit = 30, offset = 0):
   };
 }
 
+export async function fetchMarketRadar(token?: string): Promise<MarketRadarResponseData> {
+  const response = await fetch(`${API_BASE_URL}/api/market/radar`, {
+    method: 'GET',
+    headers: authHeaders(token),
+  });
+  if (!response.ok) {
+    throw new Error(`Fetch market radar failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as MarketRadarResponse;
+  if (payload.status !== 'success' || !payload.data) {
+    throw new Error('Invalid market radar payload');
+  }
+  return payload.data;
+}
+
 export async function runStockScreener(params: ScreenerRequest): Promise<ScreenerResultItem[]> {
   const response = await fetch(`${API_BASE_URL}/api/tools/screener`, {
     method: 'POST',
@@ -835,6 +894,40 @@ export async function bindInviteCode(code: string, token: string): Promise<void>
   if (!response.ok) {
     throw new Error(`Bind invite code failed: ${response.status}`);
   }
+}
+
+export async function createShareReferral(inviteePhone: string, token: string): Promise<{ id: string; status: string }> {
+  const response = await fetch(`${API_BASE_URL}/api/invite/share-referrals`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders(token),
+    },
+    body: JSON.stringify({ invitee_phone: inviteePhone }),
+  });
+  if (!response.ok) {
+    throw new Error(`Create share referral failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as { status?: string; data?: { id?: string; status?: string } };
+  if (payload.status !== 'success' || !payload.data?.id) {
+    throw new Error('Invalid create share referral payload');
+  }
+  return { id: payload.data.id, status: payload.data.status ?? 'pending' };
+}
+
+export async function fetchShareReferrals(token: string): Promise<ShareReferralItem[]> {
+  const response = await fetch(`${API_BASE_URL}/api/invite/share-referrals`, {
+    method: 'GET',
+    headers: authHeaders(token),
+  });
+  if (!response.ok) {
+    throw new Error(`Fetch share referrals failed: ${response.status}`);
+  }
+  const payload = (await response.json()) as ShareReferralListResponse;
+  if (payload.status !== 'success' || !Array.isArray(payload.data)) {
+    throw new Error('Invalid share referrals payload');
+  }
+  return payload.data;
 }
 
 export async function createPaymentOrder(plan: 'vip' | 'pro', token: string): Promise<CreatePaymentData> {
