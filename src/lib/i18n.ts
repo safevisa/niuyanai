@@ -103,6 +103,14 @@ const messages = {
       radarExportCard: '导出卡片',
       radarDisclaimer: '本内容仅供学习参考，不构成投资建议。',
     },
+    home: {
+      radarProactiveDefault: '机会雷达已加载，关注 B1/B3 信号标的并结合风险管理执行。',
+      radarProactive0930: '雷达扫描：今早有{count}支个股触发“B1趋势启动”信号，点击查看逻辑。',
+      radarProactive1430: '尾盘异动：发现主力资金逆势流入标的，雷达已更新。',
+      radarUpdatedAt: '雷达更新时间',
+      openRadarNow: '立即查看',
+      radarTotal: '今日机会',
+    },
     profile: {
       title: '个人中心',
       subtitle: '账号、会员与常用入口',

@@ -8,6 +8,7 @@ import type { MarketOverview, SearchResult } from '@/types';
 import { useAppStore } from '@/store';
 import { generateDailyReport, type DailyReport } from '@/lib/api';
 import { fetchIndustryRotation, fetchMarketStocksPage } from '@/lib/api';
+import { fetchMarketRadar, type RadarItem } from '@/lib/api';
 import { fetchCurrentUser } from '@/lib/api';
 import { t } from '@/lib/i18n';
 import { trackEvent } from '@/lib/analytics';
@@ -212,6 +213,66 @@ function HotSectors({ sectors }: { overview: MarketOverview; sectors: MarketOver
   );
 }
 
+function DailyRadarHero({
+  radarItems,
+  updatedAt,
+  onOpenRadar,
+}: {
+  radarItems: RadarItem[];
+  updatedAt: string;
+  onOpenRadar: () => void;
+}) {
+  const b1Count = radarItems.filter((x) => x.radar_category === 'B1').length;
+  const now = new Date();
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  const isMorningWindow = minutes >= 9 * 60 + 30 && minutes < 12 * 60;
+  const isAfternoonWindow = minutes >= 14 * 60 + 30 && minutes < 15 * 60 + 30;
+
+  let proactive = t('home.radarProactiveDefault');
+  if (isMorningWindow) {
+    proactive = t('home.radarProactive0930').replace('{count}', String(b1Count));
+  } else if (isAfternoonWindow) {
+    proactive = t('home.radarProactive1430');
+  }
+
+  return (
+    <div
+      className="rounded-2xl p-4 border"
+      style={{
+        background: 'linear-gradient(135deg, rgba(255,215,0,0.16) 0%, rgba(10,15,30,0.65) 100%)',
+        borderColor: 'rgba(255,215,0,0.35)',
+      }}
+    >
+      <div className="flex items-center justify-between">
+        <div>
+          <div className="text-sm font-bold text-dark-100">{t('market.radarTitle')}</div>
+          <div className="text-xs text-dark-300 mt-1">{proactive}</div>
+          <div className="text-[11px] text-dark-500 mt-1">
+            {t('home.radarUpdatedAt')} {updatedAt}
+          </div>
+        </div>
+        <button className="btn-primary text-xs px-3 py-2" onClick={onOpenRadar}>
+          {t('home.openRadarNow')}
+        </button>
+      </div>
+      <div className="grid grid-cols-3 gap-2 mt-3 text-xs">
+        <div className="card card-sm">
+          <div className="text-dark-400">{t('home.radarTotal')}</div>
+          <div className="font-bold text-dark-100 mt-1">{radarItems.length}</div>
+        </div>
+        <div className="card card-sm">
+          <div className="text-dark-400">B1</div>
+          <div className="font-bold text-bull mt-1">{b1Count}</div>
+        </div>
+        <div className="card card-sm">
+          <div className="text-dark-400">B3</div>
+          <div className="font-bold text-orange-300 mt-1">{radarItems.filter((x) => x.radar_category === 'B3').length}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function HomePage() {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [mounted, setMounted] = useState(false);
@@ -219,6 +280,8 @@ export default function HomePage() {
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [analysisCacheNotice, setAnalysisCacheNotice] = useState<string | null>(null);
+  const [radarItems, setRadarItems] = useState<RadarItem[]>([]);
+  const [radarUpdatedAt, setRadarUpdatedAt] = useState('');
   const { user, token, setUser, priorityPinnedCodes, togglePriorityPinnedCode, setActiveTab, setCurrentAnalysis, setIsAnalyzing } = useAppStore();
   const remaining = Math.max(0, (user?.daily_quota ?? 3) - (user?.daily_used ?? 0));
 
@@ -268,6 +331,22 @@ export default function HomePage() {
     const timer = window.setInterval(() => void loadOverview(), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const loadRadar = async () => {
+      try {
+        const radar = await fetchMarketRadar(token ?? undefined);
+        setRadarItems(radar.items || []);
+        setRadarUpdatedAt(new Date().toLocaleString('zh-CN'));
+      } catch {
+        setRadarItems([]);
+        setRadarUpdatedAt(new Date().toLocaleString('zh-CN'));
+      }
+    };
+    void loadRadar();
+    const timer = window.setInterval(() => void loadRadar(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [token]);
 
   const handleStockSelect = async (stock: SearchResult) => {
     trackEvent('home_select_stock', { code: stock.code });
@@ -423,6 +502,14 @@ export default function HomePage() {
           <div className="skeleton h-20 w-full" />
         </div>
       )}
+
+      <DailyRadarHero
+        radarItems={radarItems}
+        updatedAt={radarUpdatedAt}
+        onOpenRadar={() => {
+          window.location.href = '/market/radar';
+        }}
+      />
 
       {/* Market stats */}
       {mounted && overview ? (
