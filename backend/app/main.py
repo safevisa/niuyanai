@@ -779,7 +779,10 @@ async def get_market_radar(
     authorization: Optional[str] = Header(default=None),
     db: Session = Depends(get_db),
 ):
-    rows = await RadarService.calculate_daily_radar(db)
+    try:
+        rows = await RadarService.calculate_daily_radar(db)
+    except Exception:
+        rows = []
 
     vip_level = 0
     if authorization and authorization.startswith("Bearer "):

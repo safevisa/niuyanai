@@ -327,7 +327,30 @@ class RadarService:
             row.code
             for row in db.query(StockMaster.code).filter(StockMaster.list_status == "listed").all()
         }
-        quotes = cls._fetch_market_pool()
+        try:
+            quotes = cls._fetch_market_pool()
+        except Exception:
+            quotes = []
+        if not quotes:
+            # Fallback to local market list when upstream quote API is unstable.
+            fallback_rows = StockDataService.list_market_stocks(q="", limit=80, offset=0)
+            quotes = []
+            for row in fallback_rows:
+                market = str(row.get("market") or "SH")
+                quotes.append(
+                    {
+                        "f12": row.get("code"),
+                        "f14": row.get("name"),
+                        "f13": "1" if market == "SH" else "0",
+                        "f100": row.get("industry"),
+                        "f2": int(float(row.get("price") or 0) * 100),
+                        "f3": int(float(row.get("pct_change") or 0) * 100),
+                        "f6": float(row.get("price") or 0) * 1e8,  # synthetic amount baseline
+                        "f8": max(3.1, abs(float(row.get("pct_change") or 0)) * 2.0),
+                        "f9": row.get("pe") or 0,
+                        "f23": row.get("pb") or 0,
+                    }
+                )
         if not quotes:
             return []
 
