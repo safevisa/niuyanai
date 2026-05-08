@@ -106,10 +106,18 @@ class AIEngine:
             result["analysis_model"] = active_model
             return self._enrich_result(result, data)
         except Exception as e:
-            logger.error(f"AI Engine Error: {str(e)}")
-            if settings.ANALYSIS_REQUIRE_LLM:
-                raise RuntimeError(f"LLM analysis failed: {e}")
-            return self._generate_rule_based_response(data)
+            # Always fall back to rule-based analysis to guarantee an answer.
+            # Frontend will show the analysis_mode + disclaimer, and we attach the
+            # LLM failure reason for transparency (without breaking existing schema).
+            err = str(e)
+            logger.error(f"AI Engine Error: {err}")
+            fallback = self._generate_rule_based_response(data)
+            fallback["llm_provider"] = self.provider
+            fallback["llm_error"] = err
+            # Ensure the user can see we did NOT call / did NOT succeed with LLM.
+            fallback["analysis_mode"] = "rule_based"
+            fallback["analysis_model"] = "rule_engine_v1"
+            return fallback
 
     async def _call_openai(self, prompt: str) -> Dict[str, Any]:
         if not self.openai_client:

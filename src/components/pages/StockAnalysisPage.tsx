@@ -11,7 +11,7 @@ import SearchBar from '@/components/SearchBar';
 import { useAppStore } from '@/store';
 import type { StockAnalysis, SearchResult } from '@/types';
 import { generateMockKLineData } from '@/lib/mockData';
-import { fetchAnalysisHistory, requestStockAnalysis } from '@/lib/api';
+import { fetchAnalysisHistory, fetchCurrentUser, requestStockAnalysis } from '@/lib/api';
 import { formatDate, t } from '@/lib/i18n';
 import { trackEvent } from '@/lib/analytics';
 
@@ -393,7 +393,7 @@ function StopTakeSuggestionCard({ analysis }: { analysis: StockAnalysis }) {
 }
 
 export default function StockAnalysisPage() {
-  const { user, token, currentAnalysis, isAnalyzing, setCurrentAnalysis, setIsAnalyzing } = useAppStore();
+  const { user, token, setUser, currentAnalysis, isAnalyzing, setCurrentAnalysis, setIsAnalyzing } = useAppStore();
   const [showKLine, setShowKLine] = useState(false);
   const [showHistory, setShowHistory] = useState(true);
   const [historyPageSize] = useState(10);
@@ -415,7 +415,10 @@ export default function StockAnalysisPage() {
   >([]);
   const [notice, setNotice] = useState<string | null>(null);
   const [analyzingElapsed, setAnalyzingElapsed] = useState(0);
-  const remaining = Math.max(0, (user?.daily_quota ?? 3) - (user?.daily_used ?? 0));
+  const [guestRemaining, setGuestRemaining] = useState(3);
+  const remaining = user
+    ? Math.max(0, (user.daily_quota ?? 3) - (user.daily_used ?? 0))
+    : guestRemaining;
   const klineData = currentAnalysis
     ? generateMockKLineData(currentAnalysis.stock_code)
     : [];
@@ -485,8 +488,20 @@ export default function StockAnalysisPage() {
       setCurrentAnalysis(analysis);
       setNotice(null);
       if (token) {
+        // Ensure quota UI updates immediately after a successful analysis.
+        try {
+          const me = await fetchCurrentUser(token);
+          setUser(me);
+        } catch {
+          // ignore
+        }
         setHistoryOffset(0);
         await loadHistory(true);
+      } else {
+        const q = (analysis as unknown as { __quota?: { daily_remaining?: number } }).__quota;
+        if (typeof q?.daily_remaining === 'number') {
+          setGuestRemaining(Math.max(0, q.daily_remaining));
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : '';

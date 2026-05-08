@@ -10,6 +10,12 @@ const API_BASE_URL =
 type AnalysisApiResponse = {
   status?: string;
   data?: Partial<StockAnalysis>;
+  quota?: {
+    daily_quota: number;
+    daily_used: number;
+    daily_remaining: number;
+    from_cache?: boolean;
+  };
 };
 
 type AnalysisTaskCreateResponse = {
@@ -417,7 +423,12 @@ export async function requestStockAnalysis(stock: SearchResult, token?: string):
     if (payload.status !== 'success' || !payload.data) {
       throw new Error('Invalid analysis response payload');
     }
-    return normalizeAnalysis(stock, payload.data);
+    const analysis = normalizeAnalysis(stock, payload.data);
+    // Attach quota for guest display (non-breaking).
+    if (payload.quota) {
+      (analysis as unknown as { __quota?: AnalysisApiResponse['quota'] }).__quota = payload.quota;
+    }
+    return analysis;
   };
 
   const createEndpoint = token
@@ -466,7 +477,11 @@ export async function requestStockAnalysis(stock: SearchResult, token?: string):
         if (resultPayload?.status !== 'success' || !resultPayload.data) {
           throw new Error('Invalid analysis task result payload');
         }
-        return normalizeAnalysis(stock, resultPayload.data);
+        const analysis = normalizeAnalysis(stock, resultPayload.data);
+        if (resultPayload.quota) {
+          (analysis as unknown as { __quota?: AnalysisApiResponse['quota'] }).__quota = resultPayload.quota;
+        }
+        return analysis;
       }
       if (taskStatus === 'failed') {
         const detail = statusPayload.data?.error ?? 'Analysis task failed';

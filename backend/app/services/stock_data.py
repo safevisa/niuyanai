@@ -337,10 +337,33 @@ class StockDataService:
 
     @classmethod
     def get_full_analysis_data(cls, stock_code: str) -> Dict[str, Any]:
-        data = cls.get_stock_basic(stock_code)
+        base_error = ""
+        try:
+            data = cls.get_stock_basic(stock_code)
+        except Exception as exc:
+            # Guarantee analysis can still complete; return a stable structure and
+            # surface the failure via announcement_risk for user-facing notice.
+            base_error = str(exc)
+            stock = cls._find_stock(stock_code)
+            data = {
+                "stock_code": stock_code,
+                "stock_name": stock.get("name", f"股票{stock_code}"),
+                "market": stock.get("market", "SH"),
+                "industry": stock.get("industry", "未知"),
+                "data_as_of": None,
+                "current_price": 0.0,
+                "pct_change": 0.0,
+                "pe": 0.0,
+                "pb": 0.0,
+                "market_sentiment": "中性",
+                "announcement_risk": f"行情数据暂不可用：{base_error}",
+            }
+
         data.update(cls.get_technical_indicators(data))
         data.update(cls.get_capital_flow(data))
         data.update(cls.get_chip_distribution(data))
+        if base_error and not data.get("announcement_risk"):
+            data["announcement_risk"] = f"行情数据暂不可用：{base_error}"
         return data
 
     @staticmethod

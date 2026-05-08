@@ -8,6 +8,7 @@ import type { MarketOverview, SearchResult } from '@/types';
 import { useAppStore } from '@/store';
 import { generateDailyReport, type DailyReport } from '@/lib/api';
 import { fetchIndustryRotation, fetchMarketStocksPage } from '@/lib/api';
+import { fetchCurrentUser } from '@/lib/api';
 import { t } from '@/lib/i18n';
 import { trackEvent } from '@/lib/analytics';
 import { getAnalysisWithCache, isAnalysisFresh } from '@/lib/analysisCache';
@@ -218,7 +219,7 @@ export default function HomePage() {
   const [dailyReport, setDailyReport] = useState<DailyReport | null>(null);
   const [reportLoading, setReportLoading] = useState(false);
   const [analysisCacheNotice, setAnalysisCacheNotice] = useState<string | null>(null);
-  const { user, token, priorityPinnedCodes, togglePriorityPinnedCode, setActiveTab, setCurrentAnalysis, setIsAnalyzing } = useAppStore();
+  const { user, token, setUser, priorityPinnedCodes, togglePriorityPinnedCode, setActiveTab, setCurrentAnalysis, setIsAnalyzing } = useAppStore();
   const remaining = Math.max(0, (user?.daily_quota ?? 3) - (user?.daily_used ?? 0));
 
   useEffect(() => {
@@ -280,6 +281,14 @@ export default function HomePage() {
       setCurrentAnalysis(analysis);
       setNotice(null);
       setAnalysisCacheNotice(wasFresh ? '已使用缓存分析（45秒内）' : '分析数据已刷新');
+      if (token) {
+        try {
+          const me = await fetchCurrentUser(token);
+          setUser(me);
+        } catch {
+          // ignore
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : '';
       if (message.startsWith('QUOTA_EXCEEDED:')) {
